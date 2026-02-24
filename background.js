@@ -81,9 +81,13 @@ async function syncFromPayload(payload) {
     managedBookmarkIds: {}
   };
 
+  const rootOrder = [];
   for (const folder of desired) {
-    await applyFolder(folder, rootId, nextState);
+    const folderId = await applyFolder(folder, rootId, nextState);
+    rootOrder.push(folderId);
   }
+
+  await reorderChildren(rootId, rootOrder);
 
   await prune(rootId, state, nextState);
   await chrome.storage.local.set({ [STORAGE_KEY]: nextState });
@@ -138,6 +142,8 @@ async function applyFolder(folder, parentId, nextState) {
 
   nextState.managedFolderIds[folder.key] = folderNode.id;
 
+  const orderedChildIds = [];
+
   for (const link of folder.links || []) {
     const currentChildren = await chrome.bookmarks.getChildren(folderNode.id);
     let bookmark = currentChildren.find((child) => !!child.url && child.url === link.url);
@@ -151,10 +157,26 @@ async function applyFolder(folder, parentId, nextState) {
       bookmark = await chrome.bookmarks.update(bookmark.id, { title: link.title });
     }
     nextState.managedBookmarkIds[link.key] = bookmark.id;
+    orderedChildIds.push(bookmark.id);
   }
 
   for (const child of folder.children || []) {
-    await applyFolder(child, folderNode.id, nextState);
+    const childFolderId = await applyFolder(child, folderNode.id, nextState);
+    orderedChildIds.push(childFolderId);
+  }
+
+  await reorderChildren(folderNode.id, orderedChildIds);
+  return folderNode.id;
+}
+
+async function reorderChildren(parentId, desiredOrderIds) {
+  for (const [targetIndex, id] of desiredOrderIds.entries()) {
+    const children = await chrome.bookmarks.getChildren(parentId);
+    const currentIndex = children.findIndex((child) => child.id === id);
+    if (currentIndex === -1 || currentIndex === targetIndex) {
+      continue;
+    }
+    await chrome.bookmarks.move(id, { parentId, index: targetIndex });
   }
 }
 
