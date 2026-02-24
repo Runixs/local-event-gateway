@@ -144,17 +144,11 @@ async function applyFolder(folder, parentId, nextState) {
   const orderedChildIds = [];
 
   for (const link of folder.links || []) {
-    const currentChildren = await chrome.bookmarks.getChildren(folderNode.id);
-    let bookmark = currentChildren.find((child) => !!child.url && child.url === link.url);
-    if (!bookmark) {
-      bookmark = await chrome.bookmarks.create({
-        parentId: folderNode.id,
-        title: link.title,
-        url: link.url
-      });
-    } else if (bookmark.title !== link.title) {
-      bookmark = await chrome.bookmarks.update(bookmark.id, { title: link.title });
-    }
+    const bookmark = await chrome.bookmarks.create({
+      parentId: folderNode.id,
+      title: link.title,
+      url: link.url
+    });
     nextState.managedBookmarkIds[link.key] = bookmark.id;
     orderedChildIds.push(bookmark.id);
   }
