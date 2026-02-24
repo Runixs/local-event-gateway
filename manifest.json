@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Local Event Gateway",
+  "version": "0.1.0",
+  "description": "Local bridge driven bookmark sync gateway.",
+  "permissions": ["bookmarks", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "action": {
+    "default_title": "Local Event Gateway",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
