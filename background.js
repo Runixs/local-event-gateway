@@ -76,6 +76,7 @@ async function syncFromPayload(payload) {
 
   const state = await getState();
   const rootId = await ensureRootFolder(rootFolderName, state);
+  await clearManagedTree(rootId, state);
   const nextState = {
     managedFolderIds: { __root__: rootId },
     managedBookmarkIds: {}
@@ -88,8 +89,6 @@ async function syncFromPayload(payload) {
   }
 
   await reorderChildren(rootId, rootOrder);
-
-  await prune(rootId, state, nextState);
   await chrome.storage.local.set({ [STORAGE_KEY]: nextState });
   return nextState;
 }
@@ -177,6 +176,17 @@ async function reorderChildren(parentId, desiredOrderIds) {
       continue;
     }
     await chrome.bookmarks.move(id, { parentId, index: targetIndex });
+  }
+}
+
+async function clearManagedTree(rootId, state) {
+  for (const id of Object.values(state.managedBookmarkIds || {})) {
+    await removeBookmarkSafe(id);
+  }
+
+  const folderEntries = Object.entries(state.managedFolderIds || {}).filter(([key]) => key !== "__root__");
+  for (const [, id] of folderEntries) {
+    await removeFolderSafe(id, rootId);
   }
 }
 
