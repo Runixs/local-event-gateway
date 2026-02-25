@@ -181,26 +181,36 @@ async function syncFromPayload(payload) {
   const desired = Array.isArray(payload?.desired) ? payload.desired : [];
 
   const state = await getState();
-  const rootId = await ensureRootFolder(rootFolderName, state);
-  await clearManagedTree(rootId, state);
-  const nextState = {
-    managedFolderIds: { __root__: rootId },
-    managedBookmarkIds: {},
-    reverseQueue: state.reverseQueue,
-    bookmarkIdToManagedKey: state.bookmarkIdToManagedKey,
-    suppressionState: state.suppressionState,
-    importInProgress: state.importInProgress
-  };
+  setApplyEpoch(state, true);
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
 
-  const rootOrder = [];
-  for (const folder of desired) {
-    const folderId = await applyFolder(folder, rootId, nextState);
-    rootOrder.push(folderId);
+  try {
+    const rootId = await ensureRootFolder(rootFolderName, state);
+    await clearManagedTree(rootId, state);
+    const nextState = {
+      managedFolderIds: { __root__: rootId },
+      managedBookmarkIds: {},
+      reverseQueue: state.reverseQueue,
+      bookmarkIdToManagedKey: state.bookmarkIdToManagedKey,
+      suppressionState: state.suppressionState,
+      importInProgress: state.importInProgress
+    };
+
+    const rootOrder = [];
+    for (const folder of desired) {
+      const folderId = await applyFolder(folder, rootId, nextState);
+      rootOrder.push(folderId);
+    }
+
+    await reorderChildren(rootId, rootOrder);
+    await chrome.storage.local.set({ [STORAGE_KEY]: nextState });
+    return nextState;
+  } finally {
+    const resetState = await getState();
+    setApplyEpoch(resetState, false);
+    setCooldown(resetState, 3000);
+    await chrome.storage.local.set({ [STORAGE_KEY]: resetState });
   }
-
-  await reorderChildren(rootId, rootOrder);
-  await chrome.storage.local.set({ [STORAGE_KEY]: nextState });
-  return nextState;
 }
 
 async function getState() {
@@ -213,13 +223,20 @@ async function getState() {
  * defaults when missing. Preserves all existing fields without data loss.
  * Safe to call with null, undefined, or any non-object value.
  * @param {unknown} raw
- * @returns {{ managedFolderIds: object, managedBookmarkIds: object, reverseQueue: Array, bookmarkIdToManagedKey: object, suppressionState: { applyEpoch: boolean, epochStartedAt: string|null, cooldownUntil: string|null }, importInProgress: boolean }}
+ * @returns {{ managedFolderIds: object, managedBookmarkIds: object, reverseQueue: Array, bookmarkIdToManagedKey: object, suppressionState: { applyEpoch: boolean, epochStartedAt: string|null, cooldownUntil: number|null }, importInProgress: boolean }}
  */
 function migrateState(raw) {
   const base = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
   const sup = (base.suppressionState && typeof base.suppressionState === "object" && !Array.isArray(base.suppressionState))
     ? base.suppressionState
     : {};
+  let cooldownUntil = null;
+  if (typeof sup.cooldownUntil === "number" && Number.isFinite(sup.cooldownUntil)) {
+    cooldownUntil = sup.cooldownUntil;
+  } else if (typeof sup.cooldownUntil === "string") {
+    const parsed = Date.parse(sup.cooldownUntil);
+    cooldownUntil = Number.isNaN(parsed) ? null : parsed;
+  }
   return {
     managedFolderIds: (base.managedFolderIds && typeof base.managedFolderIds === "object" && !Array.isArray(base.managedFolderIds))
       ? base.managedFolderIds
@@ -234,7 +251,7 @@ function migrateState(raw) {
     suppressionState: {
       applyEpoch: sup.applyEpoch === true,
       epochStartedAt: sup.epochStartedAt ?? null,
-      cooldownUntil: sup.cooldownUntil ?? null
+      cooldownUntil
     },
     importInProgress: base.importInProgress === true
   };
@@ -464,7 +481,7 @@ function updateBookmarkKeyMapping(state, bookmarkId, managedKey) {
  * When active=true, records epochStartedAt timestamp.
  * When active=false, clears both epochStartedAt and cooldownUntil.
  * Mutates state in place — caller must persist to chrome.storage.local.
- * @param {{ suppressionState: { applyEpoch: boolean, epochStartedAt: string|null, cooldownUntil: string|null } }} state
+ * @param {{ suppressionState: { applyEpoch: boolean, epochStartedAt: string|null, cooldownUntil: number|null } }} state
  * @param {boolean} active
  */
 function setApplyEpoch(state, active) {
@@ -475,6 +492,21 @@ function setApplyEpoch(state, active) {
     state.suppressionState.epochStartedAt = null;
     state.suppressionState.cooldownUntil = null;
   }
+}
+
+function setCooldown(state, durationMs) {
+  state.suppressionState.cooldownUntil = Date.now() + durationMs;
+}
+
+function shouldSuppressReverseEnqueue(state) {
+  if (state.suppressionState.applyEpoch === true) {
+    return true;
+  }
+  const cooldownUntil = state.suppressionState.cooldownUntil;
+  if (typeof cooldownUntil === "number" && Number.isFinite(cooldownUntil) && Date.now() < cooldownUntil) {
+    return true;
+  }
+  return false;
 }
 
 async function ensureRootFolder(name, state) {
@@ -686,6 +718,7 @@ async function handleImportEnded() {
 async function handleBookmarkCreated(id, bookmark) {
   const state = await getState();
   if (state.importInProgress) return;
+  if (shouldSuppressReverseEnqueue(state)) return;
   const parentManaged = bookmark && isManagedFolderId(state, bookmark.parentId);
   const selfManaged = isManagedBookmarkId(state, id);
   if (!selfManaged && !parentManaged) return;
@@ -706,6 +739,7 @@ async function handleBookmarkCreated(id, bookmark) {
 
 async function handleBookmarkChanged(id, changeInfo) {
   const state = await getState();
+  if (shouldSuppressReverseEnqueue(state)) return;
   if (!isManagedBookmarkId(state, id)) return;
   const event = {
     batchId: crypto.randomUUID(),
@@ -724,6 +758,7 @@ async function handleBookmarkChanged(id, changeInfo) {
 
 async function handleBookmarkRemoved(id, removeInfo) {
   const state = await getState();
+  if (shouldSuppressReverseEnqueue(state)) return;
   const isBookmark = isManagedBookmarkId(state, id);
   const isFolder = isManagedFolderId(state, id);
   if (!isBookmark && !isFolder) return;
@@ -742,6 +777,7 @@ async function handleBookmarkRemoved(id, removeInfo) {
 
 async function handleBookmarkMoved(id, moveInfo) {
   const state = await getState();
+  if (shouldSuppressReverseEnqueue(state)) return;
   const isBookmark = isManagedBookmarkId(state, id);
   const isFolder = isManagedFolderId(state, id);
   if (!isBookmark && !isFolder) return;
