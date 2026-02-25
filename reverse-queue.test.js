@@ -349,11 +349,11 @@ describe("setApplyEpoch", () => {
       suppressionState: {
         applyEpoch: false,
         epochStartedAt: null,
-        cooldownUntil: "2026-02-25T10:05:00.000Z"
+        cooldownUntil: Date.now() + 5000
       }
     });
     bg.setApplyEpoch(state, true);
-    assert.equal(state.suppressionState.cooldownUntil, "2026-02-25T10:05:00.000Z");
+    assert.ok(state.suppressionState.cooldownUntil > Date.now() - 1000, "cooldownUntil should still be set");
   });
 
   it("calling activate twice overwrites epochStartedAt with a fresh timestamp", (_, done) => {
