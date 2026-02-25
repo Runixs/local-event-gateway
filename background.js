@@ -408,12 +408,44 @@ function markFlushFailures(state, failedItems, reason) {
  * @param {{ batchId: string, results: Array<{ eventId: string, status: string }> }} ackResponse
  */
 function processReverseAckResponse(state, ackResponse) {
-  const ackedEventIds = [];
-  for (const result of ackResponse.results) {
-    rsLog('ack', { batchId: ackResponse.batchId, eventId: result.eventId, status: result.status });
-    ackedEventIds.push(result.eventId);
+  // Snapshot eventId -> queue item BEFORE mutations so bookmarkId is available for resolvedKey updates.
+  const queueItemByEventId = {};
+  for (const item of state.reverseQueue) {
+    if (item && item.event && typeof item.event.eventId === 'string') {
+      queueItemByEventId[item.event.eventId] = item;
+    }
   }
-  dequeueAckedEvents(state, ackedEventIds);
+
+  for (const result of ackResponse.results) {
+    const eventId = result.eventId;
+    const status = result.status;
+
+    if (status === 'applied') {
+      rsLog('ack', { batchId: ackResponse.batchId, eventId, status });
+      if (typeof result.resolvedKey === 'string' && result.resolvedKey.length > 0) {
+        const queueItem = queueItemByEventId[eventId];
+        if (queueItem) {
+          const bookmarkId = queueItem.event.bookmarkId;
+          if (typeof bookmarkId === 'string' && bookmarkId.length > 0) {
+            updateBookmarkKeyMapping(state, bookmarkId, result.resolvedKey);
+          }
+        }
+      }
+      dequeueAckedEvents(state, [eventId]);
+    } else if (status === 'duplicate') {
+      rsLog('ack', { batchId: ackResponse.batchId, eventId, status });
+      dequeueAckedEvents(state, [eventId]);
+    } else if (status === 'skipped_ambiguous' || status === 'skipped_unmanaged') {
+      rsLog('skip', { batchId: ackResponse.batchId, eventId, status, reason: result.reason });
+      dequeueAckedEvents(state, [eventId]);
+    } else if (status === 'rejected_invalid') {
+      rsLog('error', { batchId: ackResponse.batchId, eventId, status, reason: result.reason });
+      dequeueAckedEvents(state, [eventId]);
+    } else {
+      // Unknown/future status — log warning, keep in queue for retry.
+      rsLog('warn', { batchId: ackResponse.batchId, eventId, status, reason: 'unknown_status' });
+    }
+  }
 }
 
 /**

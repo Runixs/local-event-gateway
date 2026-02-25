@@ -1,0 +1,169 @@
+TAP version 13
+# {"ts":1772013844657,"event":"ack","batchId":"b1","eventId":"evt-1","status":"applied"}
+# {"ts":1772013844658,"event":"ack","batchId":"b1","eventId":"evt-1","status":"applied"}
+# {"ts":1772013844658,"event":"ack","batchId":"b1","eventId":"evt-1","status":"applied"}
+# {"ts":1772013844659,"event":"ack","batchId":"b1","eventId":"evt-1","status":"applied"}
+# {"ts":1772013844659,"event":"ack","batchId":"b1","eventId":"evt-1","status":"duplicate"}
+# {"ts":1772013844659,"event":"ack","batchId":"b1","eventId":"evt-1","status":"duplicate"}
+# {"ts":1772013844659,"event":"skip","batchId":"b1","eventId":"evt-1","status":"skipped_ambiguous","reason":"multiple_matches"}
+# {"ts":1772013844660,"event":"skip","batchId":"b1","eventId":"evt-1","status":"skipped_unmanaged","reason":"unrecognized_key"}
+# {"ts":1772013844660,"event":"error","batchId":"b1","eventId":"evt-1","status":"rejected_invalid","reason":"schema_error"}
+# {"ts":1772013844660,"event":"warn","batchId":"b1","eventId":"evt-1","status":"some_future_status","reason":"unknown_status"}
+# {"ts":1772013844661,"event":"warn","batchId":"b1","eventId":"evt-1","status":"transient_retry","reason":"unknown_status"}
+# {"ts":1772013844661,"event":"ack","batchId":"b1","eventId":"evt-1","status":"applied"}
+# {"ts":1772013844661,"event":"skip","batchId":"b1","eventId":"evt-2","status":"skipped_ambiguous","reason":"multiple_matches"}
+# {"ts":1772013844661,"event":"warn","batchId":"b1","eventId":"evt-3","status":"some_future_status","reason":"unknown_status"}
+# {"ts":1772013844661,"event":"ack","batchId":"b1","eventId":"evt-a","status":"applied"}
+# {"ts":1772013844661,"event":"ack","batchId":"b1","eventId":"evt-b","status":"duplicate"}
+# {"ts":1772013844662,"event":"skip","batchId":"b1","eventId":"evt-c","status":"skipped_unmanaged"}
+# {"ts":1772013844662,"event":"error","batchId":"b1","eventId":"evt-d","status":"rejected_invalid"}
+# {"ts":1772013844662,"event":"warn","batchId":"b1","eventId":"evt-e","status":"mystery_status","reason":"unknown_status"}
+# {"ts":1772013844662,"event":"ack","batchId":"b1","eventId":"evt-1","status":"applied"}
+# {"ts":1772013844662,"event":"ack","batchId":"b1","eventId":"evt-1","status":"applied"}
+# {"ts":1772013844662,"event":"ack","batchId":"b1","eventId":"evt-2","status":"applied"}
+# {"ts":1772013844662,"event":"ack","batchId":"b1","eventId":"evt-1","status":"applied"}
+# Subtest: processReverseAckResponse – applied
+    # Subtest: applied: removes event from queue
+    ok 1 - applied: removes event from queue
+      ---
+      duration_ms: 1.137917
+      ...
+    # Subtest: applied with resolvedKey: updates bookmarkIdToManagedKey
+    ok 2 - applied with resolvedKey: updates bookmarkIdToManagedKey
+      ---
+      duration_ms: 0.118458
+      ...
+    # Subtest: applied without resolvedKey: does not add null/undefined to mapping
+    ok 3 - applied without resolvedKey: does not add null/undefined to mapping
+      ---
+      duration_ms: 0.095833
+      ...
+    # Subtest: applied with resolvedKey: does not overwrite existing stable mapping with empty key
+    ok 4 - applied with resolvedKey: does not overwrite existing stable mapping with empty key
+      ---
+      duration_ms: 0.095666
+      ...
+    1..4
+ok 1 - processReverseAckResponse – applied
+  ---
+  duration_ms: 1.849875
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – duplicate
+    # Subtest: duplicate: removes event from queue (idempotent, already processed)
+    ok 1 - duplicate: removes event from queue (idempotent, already processed)
+      ---
+      duration_ms: 0.162125
+      ...
+    # Subtest: duplicate: does not update bookmarkIdToManagedKey even if resolvedKey present
+    ok 2 - duplicate: does not update bookmarkIdToManagedKey even if resolvedKey present
+      ---
+      duration_ms: 0.086792
+      ...
+    1..2
+ok 2 - processReverseAckResponse – duplicate
+  ---
+  duration_ms: 0.345333
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – skipped_ambiguous
+    # Subtest: skipped_ambiguous: removes event from queue (final, not retried)
+    ok 1 - skipped_ambiguous: removes event from queue (final, not retried)
+      ---
+      duration_ms: 0.167209
+      ...
+    1..1
+ok 3 - processReverseAckResponse – skipped_ambiguous
+  ---
+  duration_ms: 0.345708
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – skipped_unmanaged
+    # Subtest: skipped_unmanaged: removes event from queue (final, not retried)
+    ok 1 - skipped_unmanaged: removes event from queue (final, not retried)
+      ---
+      duration_ms: 0.135542
+      ...
+    1..1
+ok 4 - processReverseAckResponse – skipped_unmanaged
+  ---
+  duration_ms: 0.220959
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – rejected_invalid
+    # Subtest: rejected_invalid: removes event from queue (final, not retried)
+    ok 1 - rejected_invalid: removes event from queue (final, not retried)
+      ---
+      duration_ms: 0.171417
+      ...
+    1..1
+ok 5 - processReverseAckResponse – rejected_invalid
+  ---
+  duration_ms: 0.358625
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – unknown status
+    # Subtest: unknown status: keeps event in queue for retry
+    ok 1 - unknown status: keeps event in queue for retry
+      ---
+      duration_ms: 0.613666
+      ...
+    # Subtest: unknown status: does not mutate bookmarkIdToManagedKey
+    ok 2 - unknown status: does not mutate bookmarkIdToManagedKey
+      ---
+      duration_ms: 0.104458
+      ...
+    1..2
+ok 6 - processReverseAckResponse – unknown status
+  ---
+  duration_ms: 0.859917
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – mixed batch
+    # Subtest: applied + skipped + unknown: correct subset removed
+    ok 1 - applied + skipped + unknown: correct subset removed
+      ---
+      duration_ms: 0.215125
+      ...
+    # Subtest: all statuses in one batch: correct final queue
+    ok 2 - all statuses in one batch: correct final queue
+      ---
+      duration_ms: 0.356
+      ...
+    1..2
+ok 7 - processReverseAckResponse – mixed batch
+  ---
+  duration_ms: 0.719542
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – resolvedKey in applied ACK
+    # Subtest: resolvedKey updates bookmarkIdToManagedKey for correct bookmarkId
+    ok 1 - resolvedKey updates bookmarkIdToManagedKey for correct bookmarkId
+      ---
+      duration_ms: 0.106167
+      ...
+    # Subtest: resolvedKey for one event does not affect mapping for another
+    ok 2 - resolvedKey for one event does not affect mapping for another
+      ---
+      duration_ms: 0.176417
+      ...
+    # Subtest: resolvedKey in applied overwrites pre-existing mapping
+    ok 3 - resolvedKey in applied overwrites pre-existing mapping
+      ---
+      duration_ms: 0.065542
+      ...
+    1..3
+ok 8 - processReverseAckResponse – resolvedKey in applied ACK
+  ---
+  duration_ms: 0.411584
+  type: 'suite'
+  ...
+1..8
+# tests 16
+# suites 8
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 67.193916
