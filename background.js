@@ -6,6 +6,55 @@ const DEFAULT_BRIDGE = {
   autoSync: true
 };
 
+/**
+ * Reverse sync contract docs shared with the plugin repository.
+ * Backward compatibility strategy: parser may normalize legacy events that omit
+ * `schemaVersion` or per-event `batchId` by falling back to schema v1 and the
+ * envelope `batchId`.
+ *
+ * @typedef {"bookmark_created" | "bookmark_updated" | "bookmark_deleted" | "folder_renamed"} ReverseEventType
+ */
+
+/**
+ * @typedef {Object} ReverseEvent
+ * @property {string} batchId
+ * @property {string} eventId
+ * @property {ReverseEventType} type
+ * @property {string} bookmarkId
+ * @property {string} managedKey
+ * @property {string=} parentId
+ * @property {string=} title
+ * @property {string=} url
+ * @property {string} occurredAt ISO timestamp
+ * @property {string} schemaVersion
+ */
+
+/**
+ * @typedef {Object} ReverseBatch
+ * @property {string} batchId
+ * @property {ReverseEvent[]} events
+ * @property {string} sentAt ISO timestamp
+ */
+
+/**
+ * @typedef {"applied" | "skipped_ambiguous" | "skipped_unmanaged" | "rejected_invalid" | "duplicate"} AckStatus
+ */
+
+/**
+ * @typedef {Object} EventAck
+ * @property {string} eventId
+ * @property {AckStatus} status
+ * @property {string=} resolvedPath
+ * @property {string=} resolvedKey
+ * @property {string=} reason
+ */
+
+/**
+ * @typedef {Object} BatchAckResponse
+ * @property {string} batchId
+ * @property {EventAck[]} results
+ */
+
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureBridgeConfig();
   await ensureAutoSyncAlarm();
@@ -180,26 +229,6 @@ async function clearManagedTree(rootId, state) {
 
   const folderEntries = Object.entries(state.managedFolderIds || {}).filter(([key]) => key !== "__root__");
   for (const [, id] of folderEntries) {
-    await removeFolderSafe(id, rootId);
-  }
-}
-
-async function prune(rootId, oldState, nextState) {
-  const keepFolderIds = new Set(Object.values(nextState.managedFolderIds));
-  const keepBookmarkIds = new Set(Object.values(nextState.managedBookmarkIds));
-
-  for (const id of Object.values(oldState.managedBookmarkIds || {})) {
-    if (keepBookmarkIds.has(id)) {
-      continue;
-    }
-    await removeBookmarkSafe(id);
-  }
-
-  const folderEntries = Object.entries(oldState.managedFolderIds || {}).filter(([key]) => key !== "__root__");
-  for (const [, id] of folderEntries) {
-    if (keepFolderIds.has(id)) {
-      continue;
-    }
     await removeFolderSafe(id, rootId);
   }
 }
