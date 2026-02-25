@@ -191,7 +191,7 @@ async function syncFromPayload(payload) {
       managedFolderIds: { __root__: rootId },
       managedBookmarkIds: {},
       reverseQueue: state.reverseQueue,
-      bookmarkIdToManagedKey: state.bookmarkIdToManagedKey,
+      bookmarkIdToManagedKey: {},
       suppressionState: state.suppressionState,
       importInProgress: state.importInProgress
     };
@@ -554,6 +554,7 @@ async function applyFolder(folder, parentId, nextState) {
       url: link.url
     });
     nextState.managedBookmarkIds[link.key] = bookmark.id;
+    nextState.bookmarkIdToManagedKey[bookmark.id] = link.key;
     orderedChildIds.push(bookmark.id);
   }
 
@@ -673,7 +674,26 @@ async function ensureReverseFlushAlarm() {
  * @returns {boolean}
  */
 function isManagedBookmarkId(state, id) {
-  return Boolean(state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id] != null);
+  return getManagedBookmarkKeyById(state, id) !== null;
+}
+
+function getManagedBookmarkKeyById(state, id) {
+  if (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id] != null) {
+    return state.bookmarkIdToManagedKey[id];
+  }
+
+  const mids = state.managedBookmarkIds;
+  if (!mids || typeof mids !== "object" || Array.isArray(mids)) {
+    return null;
+  }
+
+  for (const key in mids) {
+    if (mids[key] === id) {
+      return key;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -689,6 +709,19 @@ function isManagedFolderId(state, id) {
     if (fids[key] === id) return true;
   }
   return false;
+}
+
+function getManagedFolderKeyById(state, id) {
+  const fids = state.managedFolderIds;
+  if (!fids || typeof fids !== "object" || Array.isArray(fids)) {
+    return null;
+  }
+  for (const key in fids) {
+    if (key !== "__root__" && fids[key] === id) {
+      return key;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -722,12 +755,13 @@ async function handleBookmarkCreated(id, bookmark) {
   const parentManaged = bookmark && isManagedFolderId(state, bookmark.parentId);
   const selfManaged = isManagedBookmarkId(state, id);
   if (!selfManaged && !parentManaged) return;
+  const managedKey = getManagedBookmarkKeyById(state, id) || "";
   const event = {
     batchId: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
     type: "bookmark_created",
     bookmarkId: id,
-    managedKey: (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id]) || "",
+    managedKey,
     title: bookmark ? bookmark.title : undefined,
     url: bookmark ? bookmark.url : undefined,
     occurredAt: new Date().toISOString(),
@@ -740,15 +774,19 @@ async function handleBookmarkCreated(id, bookmark) {
 async function handleBookmarkChanged(id, changeInfo) {
   const state = await getState();
   if (shouldSuppressReverseEnqueue(state)) return;
-  if (!isManagedBookmarkId(state, id)) return;
+  const bookmarkKey = getManagedBookmarkKeyById(state, id);
+  const folderKey = getManagedFolderKeyById(state, id);
+  if (!bookmarkKey && !folderKey) return;
+
+  const isFolderRename = !bookmarkKey && Boolean(folderKey);
   const event = {
     batchId: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
-    type: "bookmark_updated",
+    type: isFolderRename ? "folder_renamed" : "bookmark_updated",
     bookmarkId: id,
-    managedKey: (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id]) || "",
+    managedKey: bookmarkKey || folderKey || "",
     title: changeInfo ? changeInfo.title : undefined,
-    url: changeInfo ? changeInfo.url : undefined,
+    url: isFolderRename ? undefined : (changeInfo ? changeInfo.url : undefined),
     occurredAt: new Date().toISOString(),
     schemaVersion: "1"
   };
@@ -759,15 +797,14 @@ async function handleBookmarkChanged(id, changeInfo) {
 async function handleBookmarkRemoved(id, removeInfo) {
   const state = await getState();
   if (shouldSuppressReverseEnqueue(state)) return;
-  const isBookmark = isManagedBookmarkId(state, id);
-  const isFolder = isManagedFolderId(state, id);
-  if (!isBookmark && !isFolder) return;
+  const managedKey = getManagedBookmarkKeyById(state, id);
+  if (!managedKey) return;
   const event = {
     batchId: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
     type: "bookmark_deleted",
     bookmarkId: id,
-    managedKey: (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id]) || "",
+    managedKey,
     occurredAt: new Date().toISOString(),
     schemaVersion: "1"
   };
@@ -778,15 +815,14 @@ async function handleBookmarkRemoved(id, removeInfo) {
 async function handleBookmarkMoved(id, moveInfo) {
   const state = await getState();
   if (shouldSuppressReverseEnqueue(state)) return;
-  const isBookmark = isManagedBookmarkId(state, id);
-  const isFolder = isManagedFolderId(state, id);
-  if (!isBookmark && !isFolder) return;
+  const managedKey = getManagedBookmarkKeyById(state, id);
+  if (!managedKey) return;
   const event = {
     batchId: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
     type: "bookmark_updated",
     bookmarkId: id,
-    managedKey: (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id]) || "",
+    managedKey,
     occurredAt: new Date().toISOString(),
     schemaVersion: "1"
   };

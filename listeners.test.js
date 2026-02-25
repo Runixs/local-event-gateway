@@ -187,6 +187,37 @@ describe("handleBookmarkChanged – managed bookmark", () => {
 
     assert.equal(stateStore.state.reverseQueue.length, 0);
   });
+
+  it("enqueues folder_renamed event for managed folder id", async () => {
+    stateStore.state = managedState();
+
+    await bg.handleBookmarkChanged("101", {
+      title: "Renamed Folder"
+    });
+
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    const item = stateStore.state.reverseQueue[0];
+    assert.equal(item.event.type, "folder_renamed");
+    assert.equal(item.event.bookmarkId, "101");
+    assert.equal(item.event.managedKey, "folder:Projects");
+    assert.equal(item.event.title, "Renamed Folder");
+    assert.equal(item.event.url, undefined);
+  });
+
+  it("falls back to managedBookmarkIds when reverse map entry is missing", async () => {
+    stateStore.state = managedState({
+      bookmarkIdToManagedKey: {}
+    });
+
+    await bg.handleBookmarkChanged("bk1", {
+      title: "Fallback Key"
+    });
+
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    const item = stateStore.state.reverseQueue[0];
+    assert.equal(item.event.type, "bookmark_updated");
+    assert.equal(item.event.managedKey, "note:Projects/Alpha");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -211,6 +242,14 @@ describe("handleBookmarkRemoved – managed bookmark", () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkRemoved("bk-not-managed", {});
+
+    assert.equal(stateStore.state.reverseQueue.length, 0);
+  });
+
+  it("does NOT enqueue for managed folder id", async () => {
+    stateStore.state = managedState();
+
+    await bg.handleBookmarkRemoved("101", { parentId: "100", index: 0 });
 
     assert.equal(stateStore.state.reverseQueue.length, 0);
   });
@@ -263,6 +302,14 @@ describe("handleBookmarkMoved – managed bookmark", () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkMoved("bk-not-managed-99", { parentId: "999", index: 0 });
+
+    assert.equal(stateStore.state.reverseQueue.length, 0);
+  });
+
+  it("does NOT enqueue for managed folder id", async () => {
+    stateStore.state = managedState();
+
+    await bg.handleBookmarkMoved("101", { parentId: "100", index: 0 });
 
     assert.equal(stateStore.state.reverseQueue.length, 0);
   });
