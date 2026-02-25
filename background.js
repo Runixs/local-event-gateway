@@ -323,6 +323,7 @@ async function flushReverseQueue(state, bridgeUrl, bridgeToken) {
   }
 
   const batchId = crypto.randomUUID();
+  const reverseSyncUrl = resolveReverseSyncUrl(bridgeUrl);
   rsLog('flush', { batchId, count });
 
   const payload = {
@@ -332,7 +333,7 @@ async function flushReverseQueue(state, bridgeUrl, bridgeToken) {
   };
 
   try {
-    const response = await fetch(`${bridgeUrl}/reverse-sync`, {
+    const response = await fetch(reverseSyncUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -361,6 +362,23 @@ async function flushReverseQueue(state, bridgeUrl, bridgeToken) {
   } finally {
     await chrome.storage.local.set({ [STORAGE_KEY]: state });
   }
+}
+
+function resolveReverseSyncUrl(bridgeUrl) {
+  const raw = String(bridgeUrl || "").trim();
+  if (!raw) {
+    return "/reverse-sync";
+  }
+
+  const withoutHash = raw.split("#", 1)[0];
+  const withoutQuery = withoutHash.split("?", 1)[0];
+  const normalized = withoutQuery.replace(/\/+$/, "");
+
+  if (normalized.endsWith("/payload")) {
+    return `${normalized.slice(0, -"/payload".length)}/reverse-sync`;
+  }
+
+  return `${normalized}/reverse-sync`;
 }
 
 function removeSupersededCoalescedEvents(state, coalescedItems) {

@@ -230,4 +230,20 @@ describe("flushReverseQueue", () => {
     const sawQuarantine = h.logs.some((line) => line.includes('"event":"quarantine"'));
     assert.equal(sawQuarantine, true);
   });
+
+  it("posts to /reverse-sync when bridge url is configured as /payload", async () => {
+    const state = h.bg.migrateState({
+      reverseQueue: [queueItem("e1", "b1", 0)]
+    });
+
+    h.setFetch(async () => ({
+      ok: true,
+      json: async () => ({ batchId: "batch-ack", results: [{ eventId: "e1", status: "applied" }] })
+    }));
+
+    await h.bg.flushReverseQueue(state, "http://127.0.0.1:27123/payload", "token-1");
+
+    assert.equal(h.fetchCalls.length, 1);
+    assert.equal(h.fetchCalls[0][0], "http://127.0.0.1:27123/reverse-sync");
+  });
 });
