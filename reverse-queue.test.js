@@ -34,7 +34,14 @@ function makeMockChrome() {
         set() { return Promise.resolve(); }
       }
     },
-    bookmarks: {}
+    bookmarks: {
+      onCreated: { addListener() {} },
+      onChanged: { addListener() {} },
+      onRemoved: { addListener() {} },
+      onMoved: { addListener() {} },
+      onImportBegan: { addListener() {} },
+      onImportEnded: { addListener() {} }
+    }
   };
 }
 

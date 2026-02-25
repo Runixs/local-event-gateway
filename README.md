@@ -15,6 +15,17 @@ Chrome MV3 extension providing a standard local bridge automation interface for 
 - Required request header: `X-Project2Chrome-Token: <token>`
 - Auto sync: every 1 minute via MV3 alarms
 
+## Sync Behavior
+
+- Performs a managed-tree full refresh before applying each payload sync.
+- Preserves payload order for folders and bookmarks.
+- Supports duplicate bookmark URLs when the payload provides multiple link entries.
+- Treats payload as source of truth for all managed nodes under the gateway root.
+
+## Supported Tools
+
+- [Runixs/project2chrome](https://github.com/Runixs/project2chrome): Obsidian plugin that builds and serves bookmark payloads consumed by this extension.
+
 ## Messages
 
 - `gateway.getBridgeConfig`
