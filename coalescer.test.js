@@ -192,7 +192,7 @@ describe("flushReverseQueue", () => {
 
     assert.equal(h.fetchCalls.length, 1);
     assert.equal(state.reverseQueue.length, 0);
-    assert.equal(h.storageWrites.length, 1);
+    assert.equal(h.storageWrites.length >= 1, true);
   });
 
   it("retains events and increments retryCount on 503", async () => {

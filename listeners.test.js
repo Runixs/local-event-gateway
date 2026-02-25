@@ -90,7 +90,11 @@ before(() => {
 function managedState(overrides) {
   return Object.assign(
     {
-      managedFolderIds: { "__root__": "100", "folder:Projects": "101" },
+      managedFolderIds: {
+        "__root__": "100",
+        "folder:Projects": "101",
+        "note:Projects/Alpha.md": "201"
+      },
       managedBookmarkIds: { "note:Projects/Alpha": "bk1" },
       bookmarkIdToManagedKey: { "bk1": "note:Projects/Alpha" },
       reverseQueue: [],
@@ -106,19 +110,21 @@ function managedState(overrides) {
 // ---------------------------------------------------------------------------
 
 describe("handleBookmarkCreated – managed parent folder", () => {
-  it("enqueues bookmark_created event with correct shape when parent is a managed folder", async () => {
+  it("enqueues bookmark_created with derived managedKey when parent is a managed note folder", async () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkCreated("bk-new", {
       title: "New Link",
       url: "https://example.com/new",
-      parentId: "101"
+      parentId: "201",
+      index: 0
     });
 
     assert.equal(stateStore.state.reverseQueue.length, 1);
     const item = stateStore.state.reverseQueue[0];
     assert.equal(item.event.type, "bookmark_created");
     assert.equal(item.event.bookmarkId, "bk-new");
+    assert.equal(item.event.managedKey, "Projects/Alpha.md|0");
     assert.equal(item.event.title, "New Link");
     assert.equal(item.event.url, "https://example.com/new");
     assert.equal(item.event.schemaVersion, "1");
@@ -129,6 +135,20 @@ describe("handleBookmarkCreated – managed parent folder", () => {
     assert.ok(typeof item.event.occurredAt === "string" && item.event.occurredAt.length > 0,
       "occurredAt should be a non-empty ISO string");
     assert.equal(item.retryCount, 0);
+    assert.equal(stateStore.state.bookmarkIdToManagedKey["bk-new"], "Projects/Alpha.md|0");
+  });
+
+  it("does NOT enqueue when parent is managed but not a note folder", async () => {
+    stateStore.state = managedState();
+
+    await bg.handleBookmarkCreated("bk-folder-parent", {
+      title: "No Target Note",
+      url: "https://example.com/no-target",
+      parentId: "101",
+      index: 0
+    });
+
+    assert.equal(stateStore.state.reverseQueue.length, 0);
   });
 
   it("does NOT enqueue when parent folder is unmanaged", async () => {
@@ -149,7 +169,8 @@ describe("handleBookmarkCreated – managed parent folder", () => {
     await bg.handleBookmarkCreated("bk-import", {
       title: "Import Bookmark",
       url: "https://example.com/import",
-      parentId: "101"
+      parentId: "201",
+      index: 0
     });
 
     assert.equal(stateStore.state.reverseQueue.length, 0);

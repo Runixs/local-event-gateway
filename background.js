@@ -1,9 +1,16 @@
 const STORAGE_KEY = "local_event_gateway_state";
 const BRIDGE_CONFIG_KEY = "local_event_gateway_bridge";
+const DEBUG_STATE_KEY = "local_event_gateway_debug";
+const DEBUG_MAX_EVENTS = 200;
 const DEFAULT_BRIDGE = {
   url: "http://127.0.0.1:27123/payload",
   token: "project2chrome-local",
   autoSync: true
+};
+const DEFAULT_DEBUG_STATE = {
+  enabled: true,
+  showInfoBadge: false,
+  events: []
 };
 
 /**
@@ -13,7 +20,173 @@ const DEFAULT_BRIDGE = {
  * @param {object} data - event-specific fields (no token/secret values)
  */
 function rsLog(event, data) {
-  console.log(JSON.stringify({ ts: Date.now(), event, ...data }));
+  const payload = { ts: Date.now(), event, ...data };
+  console.log(JSON.stringify(payload));
+  void recordDebugEvent(payload);
+}
+
+async function ensureDebugState() {
+  const raw = await chrome.storage.local.get(DEBUG_STATE_KEY);
+  const next = sanitizeDebugState(raw?.[DEBUG_STATE_KEY]);
+  await chrome.storage.local.set({ [DEBUG_STATE_KEY]: next });
+}
+
+async function getDebugState() {
+  const raw = await chrome.storage.local.get(DEBUG_STATE_KEY);
+  return sanitizeDebugState(raw?.[DEBUG_STATE_KEY]);
+}
+
+async function setDebugOptions(input) {
+  const current = await getDebugState();
+  const next = {
+    ...current,
+    enabled: typeof input?.enabled === "boolean" ? input.enabled : current.enabled,
+    showInfoBadge: typeof input?.showInfoBadge === "boolean" ? input.showInfoBadge : current.showInfoBadge
+  };
+  await chrome.storage.local.set({ [DEBUG_STATE_KEY]: next });
+  if (!next.enabled) {
+    await clearActionDebugIndicator();
+  }
+  return next;
+}
+
+async function clearDebugEvents() {
+  const current = await getDebugState();
+  const next = {
+    ...current,
+    events: []
+  };
+  await chrome.storage.local.set({ [DEBUG_STATE_KEY]: next });
+  await clearActionDebugIndicator();
+  return next;
+}
+
+function sanitizeDebugState(raw) {
+  const base = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const rawEvents = Array.isArray(base.events) ? base.events : [];
+  const events = rawEvents
+    .filter((entry) => entry && typeof entry === "object")
+    .slice(-DEBUG_MAX_EVENTS)
+    .map((entry) => ({
+      id: typeof entry.id === "string" ? entry.id : String(Math.random()),
+      ts: Number.isFinite(entry.ts) ? entry.ts : Date.now(),
+      level: entry.level === "error" || entry.level === "warn" ? entry.level : "info",
+      event: typeof entry.event === "string" ? entry.event : "unknown",
+      summary: typeof entry.summary === "string" ? entry.summary : "",
+      data: entry.data && typeof entry.data === "object" && !Array.isArray(entry.data) ? entry.data : {}
+    }));
+
+  return {
+    enabled: typeof base.enabled === "boolean" ? base.enabled : DEFAULT_DEBUG_STATE.enabled,
+    showInfoBadge: typeof base.showInfoBadge === "boolean" ? base.showInfoBadge : DEFAULT_DEBUG_STATE.showInfoBadge,
+    events
+  };
+}
+
+async function recordDebugEvent(payload) {
+  try {
+    const state = await getDebugState();
+    if (!state.enabled) {
+      return;
+    }
+
+    const entry = toDebugEventEntry(payload);
+    const nextEvents = [...state.events, entry];
+    if (nextEvents.length > DEBUG_MAX_EVENTS) {
+      nextEvents.splice(0, nextEvents.length - DEBUG_MAX_EVENTS);
+    }
+
+    const nextState = {
+      ...state,
+      events: nextEvents
+    };
+
+    await chrome.storage.local.set({ [DEBUG_STATE_KEY]: nextState });
+    await updateActionDebugIndicator(entry, nextState);
+  } catch {}
+}
+
+function toDebugEventEntry(payload) {
+  const level = resolveDebugLevel(payload);
+  return {
+    id: typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    ts: Date.now(),
+    level,
+    event: String(payload.event || "unknown"),
+    summary: summarizeDebugPayload(payload),
+    data: payload
+  };
+}
+
+function resolveDebugLevel(payload) {
+  if (payload.event === "error" || payload.event === "quarantine") {
+    return "error";
+  }
+  if (payload.event === "warn" || payload.event === "skip") {
+    return "warn";
+  }
+  return "info";
+}
+
+function summarizeDebugPayload(payload) {
+  const status = payload.status ? ` status=${payload.status}` : "";
+  const reason = payload.reason ? ` reason=${payload.reason}` : "";
+  const eventId = payload.eventId ? ` eventId=${payload.eventId}` : "";
+  const batchId = payload.batchId ? ` batchId=${payload.batchId}` : "";
+  return `${payload.event}${status}${reason}${eventId}${batchId}`.trim();
+}
+
+async function updateActionDebugIndicator(entry, state) {
+  if (!chrome.action?.setTitle || !chrome.action?.setBadgeText || !chrome.action?.setBadgeBackgroundColor) {
+    return;
+  }
+
+  const when = new Date(entry.ts).toLocaleTimeString();
+  await chrome.action.setTitle({
+    title: `Local Event Gateway\n[${entry.level.toUpperCase()}] ${when} ${entry.summary}`
+  });
+
+  if (entry.level === "error") {
+    await chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
+    await chrome.action.setBadgeText({ text: "ERR" });
+    return;
+  }
+
+  if (entry.level === "warn") {
+    await chrome.action.setBadgeBackgroundColor({ color: "#f29900" });
+    await chrome.action.setBadgeText({ text: "WRN" });
+    return;
+  }
+
+  if (!state.showInfoBadge) {
+    return;
+  }
+
+  let text = "";
+  let color = "#1a73e8";
+  if (entry.event === "enqueue") {
+    text = "Q";
+  } else if (entry.event === "ack" && entry.data.status === "applied") {
+    text = "ACK";
+    color = "#188038";
+  } else if (entry.event === "flush") {
+    text = "UP";
+  }
+
+  if (!text) {
+    return;
+  }
+
+  await chrome.action.setBadgeBackgroundColor({ color });
+  await chrome.action.setBadgeText({ text });
+}
+
+async function clearActionDebugIndicator() {
+  if (!chrome.action?.setBadgeText || !chrome.action?.setTitle) {
+    return;
+  }
+  await chrome.action.setBadgeText({ text: "" });
+  await chrome.action.setTitle({ title: "Local Event Gateway" });
 }
 
 /**
@@ -67,6 +240,7 @@ function rsLog(event, data) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureBridgeConfig();
+  await ensureDebugState();
   await ensureAutoSyncAlarm();
   await ensureReverseFlushAlarm();
   scheduleReverseFlushSoon();
@@ -74,6 +248,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   await ensureBridgeConfig();
+  await ensureDebugState();
   await ensureAutoSyncAlarm();
   await ensureReverseFlushAlarm();
   scheduleReverseFlushSoon();
@@ -139,6 +314,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "gateway.getDebugState") {
+    void getDebugState().then((debug) => sendResponse({ ok: true, debug }));
+    return true;
+  }
+
+  if (message.type === "gateway.setDebugOptions") {
+    void setDebugOptions(message.options)
+      .then((debug) => sendResponse({ ok: true, debug }))
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+
+  if (message.type === "gateway.clearDebugEvents") {
+    void clearDebugEvents()
+      .then((debug) => sendResponse({ ok: true, debug }))
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+
   if (message.type === "gateway.setBridgeConfig") {
     void setBridgeConfig(message.config)
       .then(async (config) => {
@@ -163,6 +357,7 @@ chrome.bookmarks.onImportEnded.addListener(handleImportEnded);
 
 async function syncFromBridge() {
   const config = await getBridgeConfig();
+  rsLog("sync_start", { url: config.url });
   const response = await fetch(config.url, {
     method: "GET",
     headers: {
@@ -170,10 +365,13 @@ async function syncFromBridge() {
     }
   });
   if (!response.ok) {
+    rsLog("sync_error", { reason: `bridge_http_${response.status}` });
     throw new Error(`Bridge fetch failed: ${response.status} ${response.statusText}`);
   }
   const payload = await response.json();
-  return syncFromPayload(payload);
+  const result = await syncFromPayload(payload);
+  rsLog("sync_done", { folderCount: Array.isArray(payload?.desired) ? payload.desired.length : 0 });
+  return result;
 }
 
 async function syncFromPayload(payload) {
@@ -749,12 +947,14 @@ function getManagedFolderKeyById(state, id) {
 async function handleImportBegan() {
   const state = await getState();
   state.importInProgress = true;
+  rsLog("import_begin", {});
   await chrome.storage.local.set({ [STORAGE_KEY]: state });
 }
 
 async function handleImportEnded() {
   const state = await getState();
   state.importInProgress = false;
+  rsLog("import_end", {});
   await chrome.storage.local.set({ [STORAGE_KEY]: state });
   const config = await getBridgeConfig();
   if (config.autoSync) {
@@ -768,12 +968,37 @@ async function handleImportEnded() {
 
 async function handleBookmarkCreated(id, bookmark) {
   const state = await getState();
-  if (state.importInProgress) return;
-  if (shouldSuppressReverseEnqueue(state)) return;
+  if (state.importInProgress) {
+    rsLog("capture_skip", { reason: "import_in_progress", bookmarkId: id, type: "bookmark_created" });
+    return;
+  }
+  if (shouldSuppressReverseEnqueue(state)) {
+    rsLog("capture_skip", { reason: "suppressed", bookmarkId: id, type: "bookmark_created" });
+    return;
+  }
   const parentManaged = bookmark && isManagedFolderId(state, bookmark.parentId);
   const selfManaged = isManagedBookmarkId(state, id);
-  if (!selfManaged && !parentManaged) return;
-  const managedKey = getManagedBookmarkKeyById(state, id) || "";
+  if (!selfManaged && !parentManaged) {
+    rsLog("capture_skip", { reason: "unmanaged", bookmarkId: id, type: "bookmark_created" });
+    return;
+  }
+
+  let managedKey = getManagedBookmarkKeyById(state, id) || "";
+  if (!managedKey && bookmark) {
+    const parentKey = getManagedFolderKeyById(state, bookmark.parentId);
+    if (parentKey && parentKey.startsWith("note:")) {
+      const sourcePath = parentKey.slice("note:".length).trim();
+      const createdIndex = Number.isInteger(bookmark.index) && bookmark.index >= 0 ? bookmark.index : 0;
+      managedKey = `${sourcePath}|${String(createdIndex)}`;
+      updateBookmarkKeyMapping(state, id, managedKey);
+    }
+  }
+
+  if (!managedKey) {
+    rsLog("capture_skip", { reason: "missing_managed_key", bookmarkId: id, type: "bookmark_created" });
+    return;
+  }
+
   const event = {
     batchId: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
@@ -791,10 +1016,16 @@ async function handleBookmarkCreated(id, bookmark) {
 
 async function handleBookmarkChanged(id, changeInfo) {
   const state = await getState();
-  if (shouldSuppressReverseEnqueue(state)) return;
+  if (shouldSuppressReverseEnqueue(state)) {
+    rsLog("capture_skip", { reason: "suppressed", bookmarkId: id, type: "bookmark_changed" });
+    return;
+  }
   const bookmarkKey = getManagedBookmarkKeyById(state, id);
   const folderKey = getManagedFolderKeyById(state, id);
-  if (!bookmarkKey && !folderKey) return;
+  if (!bookmarkKey && !folderKey) {
+    rsLog("capture_skip", { reason: "unmanaged", bookmarkId: id, type: "bookmark_changed" });
+    return;
+  }
 
   const isFolderRename = !bookmarkKey && Boolean(folderKey);
   const event = {
@@ -814,9 +1045,15 @@ async function handleBookmarkChanged(id, changeInfo) {
 
 async function handleBookmarkRemoved(id, removeInfo) {
   const state = await getState();
-  if (shouldSuppressReverseEnqueue(state)) return;
+  if (shouldSuppressReverseEnqueue(state)) {
+    rsLog("capture_skip", { reason: "suppressed", bookmarkId: id, type: "bookmark_removed" });
+    return;
+  }
   const managedKey = getManagedBookmarkKeyById(state, id);
-  if (!managedKey) return;
+  if (!managedKey) {
+    rsLog("capture_skip", { reason: "unmanaged", bookmarkId: id, type: "bookmark_removed" });
+    return;
+  }
   const event = {
     batchId: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
@@ -832,9 +1069,15 @@ async function handleBookmarkRemoved(id, removeInfo) {
 
 async function handleBookmarkMoved(id, moveInfo) {
   const state = await getState();
-  if (shouldSuppressReverseEnqueue(state)) return;
+  if (shouldSuppressReverseEnqueue(state)) {
+    rsLog("capture_skip", { reason: "suppressed", bookmarkId: id, type: "bookmark_moved" });
+    return;
+  }
   const managedKey = getManagedBookmarkKeyById(state, id);
-  if (!managedKey) return;
+  if (!managedKey) {
+    rsLog("capture_skip", { reason: "unmanaged", bookmarkId: id, type: "bookmark_moved" });
+    return;
+  }
   const event = {
     batchId: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
