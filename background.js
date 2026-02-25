@@ -940,6 +940,23 @@ function getManagedFolderKeyById(state, id) {
   return null;
 }
 
+async function resolveFolderNameFromBookmarkId(id) {
+  if (!id) {
+    return "";
+  }
+
+  try {
+    const nodes = await chrome.bookmarks.get(id);
+    const node = Array.isArray(nodes) ? nodes[0] : undefined;
+    if (!node || typeof node.title !== "string") {
+      return "";
+    }
+    return node.title.trim();
+  } catch {
+    return "";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Bookmark import gating
 // ---------------------------------------------------------------------------
@@ -978,10 +995,6 @@ async function handleBookmarkCreated(id, bookmark) {
   }
   const parentManaged = bookmark && isManagedFolderId(state, bookmark.parentId);
   const selfManaged = isManagedBookmarkId(state, id);
-  if (!selfManaged && !parentManaged) {
-    rsLog("capture_skip", { reason: "unmanaged", bookmarkId: id, type: "bookmark_created" });
-    return;
-  }
 
   let managedKey = getManagedBookmarkKeyById(state, id) || "";
   if (!managedKey && bookmark) {
@@ -994,6 +1007,12 @@ async function handleBookmarkCreated(id, bookmark) {
     } else if (parentKey && parentKey.startsWith("folder:")) {
       managedKey = parentKey;
       updateBookmarkKeyMapping(state, id, managedKey);
+    } else {
+      const parentName = await resolveFolderNameFromBookmarkId(bookmark.parentId);
+      if (parentName) {
+        managedKey = `folder:${parentName}`;
+        updateBookmarkKeyMapping(state, id, managedKey);
+      }
     }
   }
 

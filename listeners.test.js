@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { describe, it, before } = require("node:test");
+const { describe, it, before, beforeEach } = require("node:test");
 const { readFileSync } = require("node:fs");
 const { runInNewContext } = require("node:vm");
 const path = require("node:path");
@@ -20,6 +20,7 @@ const { randomUUID } = require("node:crypto");
 
 const SRC = readFileSync(path.join(__dirname, "background.js"), "utf8");
 const STORAGE_KEY = "local_event_gateway_state";
+const bookmarkNodesById = new Map();
 
 /** Shared mutable store — set .state before each test */
 const stateStore = { state: null };
@@ -61,7 +62,10 @@ function makeMockChrome() {
       onMoved: { addListener() {} },
       onImportBegan: { addListener() {} },
       onImportEnded: { addListener() {} },
-      get() { return Promise.resolve([]); },
+      get(id) {
+        const node = bookmarkNodesById.get(String(id));
+        return Promise.resolve(node ? [node] : []);
+      },
       getChildren() { return Promise.resolve([]); },
       getTree() { return Promise.resolve([{ children: [{ id: "1", children: [] }] }]); }
     }
@@ -82,6 +86,10 @@ before(() => {
   };
   runInNewContext(SRC, ctx);
   bg = ctx;
+});
+
+beforeEach(() => {
+  bookmarkNodesById.clear();
 });
 
 // ---------------------------------------------------------------------------
@@ -166,6 +174,28 @@ describe("handleBookmarkCreated – managed parent folder", () => {
     });
 
     assert.equal(stateStore.state.reverseQueue.length, 0);
+  });
+
+  it("enqueues bookmark_created for unmanaged parent by deriving folder key from parent title", async () => {
+    stateStore.state = managedState();
+    bookmarkNodesById.set("555", {
+      id: "555",
+      title: "EASE"
+    });
+
+    await bg.handleBookmarkCreated("bk-fallback", {
+      title: "test",
+      url: "chrome://extensions",
+      parentId: "555",
+      index: 0
+    });
+
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    const item = stateStore.state.reverseQueue[0];
+    assert.equal(item.event.type, "bookmark_created");
+    assert.equal(item.event.bookmarkId, "bk-fallback");
+    assert.equal(item.event.managedKey, "folder:EASE");
+    assert.equal(stateStore.state.bookmarkIdToManagedKey["bk-fallback"], "folder:EASE");
   });
 
   it("does NOT enqueue during active import window (importInProgress = true)", async () => {
