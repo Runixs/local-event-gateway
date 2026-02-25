@@ -68,19 +68,59 @@ function rsLog(event, data) {
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureBridgeConfig();
   await ensureAutoSyncAlarm();
+  await ensureReverseFlushAlarm();
+  scheduleReverseFlushSoon();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await ensureBridgeConfig();
   await ensureAutoSyncAlarm();
+  await ensureReverseFlushAlarm();
+  scheduleReverseFlushSoon();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "reverseFlush") {
+    void runReverseFlush().catch(() => {});
+    return;
+  }
+
   if (alarm.name !== "local-event-gateway.autoSync") {
     return;
   }
   void syncFromBridge().catch(() => {});
 });
+
+let reverseFlushTimer = null;
+let reverseFlushInFlight = false;
+
+function scheduleReverseFlushSoon() {
+  if (typeof setTimeout !== "function") {
+    return;
+  }
+  if (reverseFlushTimer !== null) {
+    clearTimeout(reverseFlushTimer);
+  }
+  reverseFlushTimer = setTimeout(() => {
+    reverseFlushTimer = null;
+    void runReverseFlush().catch(() => {});
+  }, 2000);
+}
+
+async function runReverseFlush() {
+  if (reverseFlushInFlight) {
+    return;
+  }
+
+  reverseFlushInFlight = true;
+  try {
+    const state = await getState();
+    const config = await getBridgeConfig();
+    await flushReverseQueue(state, config.url, config.token);
+  } finally {
+    reverseFlushInFlight = false;
+  }
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== "object") {
@@ -212,8 +252,9 @@ function enqueueReverseEvent(state, event) {
     retryCount: 0,
     enqueuedAt: new Date().toISOString()
   });
-}
   rsLog('enqueue', { batchId: event.batchId, eventId: event.eventId, type: event.type });
+  scheduleReverseFlushSoon();
+}
 
 /**
  * Removes queue items whose eventId appears in ackedEventIds.
@@ -227,21 +268,137 @@ function dequeueAckedEvents(state, ackedEventIds) {
   state.reverseQueue = state.reverseQueue.filter((item) => !idSet.has(item.event.eventId));
 }
 
-/**
- * Stub: flush pending reverse queue items to the plugin bridge endpoint.
- * T6 will implement the actual HTTP send. rsLog calls are in place for audit trail.
- * @param {{ reverseQueue: Array }} state
- * @param {string} batchId
- * @param {string} bridgeUrl
- * @param {string} token - NEVER passed to rsLog
- */
-async function flushReverseQueue(state, batchId, bridgeUrl, token) {
-  const count = state.reverseQueue.length;
+function coalesceQueue(queue) {
+  if (!Array.isArray(queue) || queue.length === 0) {
+    return [];
+  }
+
+  const lastIndexByBookmarkId = {};
+  for (let i = 0; i < queue.length; i += 1) {
+    const item = queue[i];
+    const bookmarkId = item && item.event ? item.event.bookmarkId : undefined;
+    if (typeof bookmarkId === "string" && bookmarkId.length > 0) {
+      lastIndexByBookmarkId[bookmarkId] = i;
+    }
+  }
+
+  const result = [];
+  for (let i = 0; i < queue.length; i += 1) {
+    const item = queue[i];
+    const bookmarkId = item && item.event ? item.event.bookmarkId : undefined;
+    if (typeof bookmarkId !== "string" || bookmarkId.length === 0) {
+      result.push(item);
+      continue;
+    }
+    if (lastIndexByBookmarkId[bookmarkId] === i) {
+      result.push(item);
+    }
+  }
+
+  return result;
+}
+
+async function flushReverseQueue(state, bridgeUrl, bridgeToken) {
+  const coalescedItems = coalesceQueue(state.reverseQueue);
+  const count = coalescedItems.length;
+  if (count === 0) {
+    return;
+  }
+
+  const batchId = crypto.randomUUID();
   rsLog('flush', { batchId, count });
-  // TODO(T6): HTTP POST to bridgeUrl with Authorization omitted from logs
-  // On success, parse BatchAckResponse and call processReverseAckResponse(state, ackResponse)
-  void bridgeUrl;
-  void token;
+
+  const payload = {
+    batchId,
+    events: coalescedItems.map((item) => item.event),
+    sentAt: new Date().toISOString()
+  };
+
+  try {
+    const response = await fetch(`${bridgeUrl}/reverse-sync`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Project2Chrome-Token": bridgeToken
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const reason = `http_${response.status}`;
+      markFlushFailures(state, coalescedItems, reason);
+      rsLog('error', { batchId, reason });
+      return;
+    }
+
+    const ackResponse = await response.json();
+    processReverseAckResponse(state, ackResponse);
+    removeSupersededCoalescedEvents(state, coalescedItems);
+  } catch (error) {
+    markFlushFailures(state, coalescedItems, "network_error");
+    rsLog('error', {
+      batchId,
+      reason: 'network_error',
+      message: error && error.message ? String(error.message) : String(error)
+    });
+  } finally {
+    await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  }
+}
+
+function removeSupersededCoalescedEvents(state, coalescedItems) {
+  const coalescedBookmarkIds = new Set();
+  const coalescedEventIds = new Set();
+
+  for (const item of coalescedItems) {
+    const eventId = item.event.eventId;
+    const bookmarkId = item.event.bookmarkId;
+    coalescedEventIds.add(eventId);
+    if (typeof bookmarkId === "string" && bookmarkId.length > 0) {
+      coalescedBookmarkIds.add(bookmarkId);
+    }
+  }
+
+  state.reverseQueue = state.reverseQueue.filter((item) => {
+    const eventId = item.event.eventId;
+    const bookmarkId = item.event.bookmarkId;
+    if (typeof bookmarkId !== "string" || bookmarkId.length === 0) {
+      return true;
+    }
+    if (!coalescedBookmarkIds.has(bookmarkId)) {
+      return true;
+    }
+    return coalescedEventIds.has(eventId);
+  });
+}
+
+function markFlushFailures(state, failedItems, reason) {
+  const failedIds = new Set(failedItems.map((item) => item.event.eventId));
+  const nextQueue = [];
+
+  for (const item of state.reverseQueue) {
+    const eventId = item.event.eventId;
+    if (!failedIds.has(eventId)) {
+      nextQueue.push(item);
+      continue;
+    }
+
+    const nextRetryCount = Number(item.retryCount || 0) + 1;
+    if (nextRetryCount >= 3) {
+      rsLog('quarantine', {
+        eventId,
+        bookmarkId: item.event.bookmarkId,
+        retryCount: nextRetryCount,
+        reason
+      });
+      continue;
+    }
+
+    item.retryCount = nextRetryCount;
+    nextQueue.push(item);
+  }
+
+  state.reverseQueue = nextQueue;
 }
 
 /**
@@ -431,6 +588,12 @@ async function ensureAutoSyncAlarm() {
   }
   await chrome.alarms.create("local-event-gateway.autoSync", {
     periodInMinutes: 1
+  });
+}
+
+async function ensureReverseFlushAlarm() {
+  await chrome.alarms.create("reverseFlush", {
+    periodInMinutes: 0.05
   });
 }
 
