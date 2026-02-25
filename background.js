@@ -991,6 +991,9 @@ async function handleBookmarkCreated(id, bookmark) {
       const createdIndex = Number.isInteger(bookmark.index) && bookmark.index >= 0 ? bookmark.index : 0;
       managedKey = `${sourcePath}|${String(createdIndex)}`;
       updateBookmarkKeyMapping(state, id, managedKey);
+    } else if (parentKey && parentKey.startsWith("folder:")) {
+      managedKey = parentKey;
+      updateBookmarkKeyMapping(state, id, managedKey);
     }
   }
 
