@@ -140,6 +140,29 @@ describe("coalesceQueue", () => {
     assert.equal(Array.isArray(result), true);
     assert.equal(result.length, 0);
   });
+
+  it("preserves all folder_renamed items without bookmarkId (no coalescing)", () => {
+    const folderItem = (eventId) => ({
+      event: {
+        batchId: "batch-seed",
+        eventId,
+        type: "folder_renamed",
+        bookmarkId: "",  // empty bookmarkId — no coalescing key
+        managedKey: "folder:Projects/Alpha",
+        occurredAt: "2026-02-25T00:00:00.000Z",
+        schemaVersion: "1"
+      },
+      retryCount: 0,
+      enqueuedAt: "2026-02-25T00:00:00.000Z"
+    });
+    const queue = [folderItem("fe1"), folderItem("fe2"), folderItem("fe3")];
+    const result = h.bg.coalesceQueue(queue);
+
+    assert.equal(result.length, 3);
+    assert.equal(result[0].event.eventId, "fe1");
+    assert.equal(result[1].event.eventId, "fe2");
+    assert.equal(result[2].event.eventId, "fe3");
+  });
 });
 
 describe("flushReverseQueue", () => {

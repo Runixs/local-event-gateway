@@ -239,3 +239,61 @@ describe("handleImportEnded", () => {
     assert.equal(stateStore.state.importInProgress, false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// handleBookmarkMoved
+// ---------------------------------------------------------------------------
+
+describe("handleBookmarkMoved – managed bookmark", () => {
+  it("enqueues bookmark_updated event for managed bookmark id", async () => {
+    stateStore.state = managedState();
+
+    await bg.handleBookmarkMoved("bk1", { parentId: "101", index: 0 });
+
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    const item = stateStore.state.reverseQueue[0];
+    assert.equal(item.event.type, "bookmark_updated");
+    assert.equal(item.event.bookmarkId, "bk1");
+    assert.equal(item.event.managedKey, "note:Projects/Alpha");
+    assert.equal(item.event.schemaVersion, "1");
+    assert.equal(item.retryCount, 0);
+  });
+
+  it("does NOT enqueue for unmanaged bookmark id", async () => {
+    stateStore.state = managedState();
+
+    await bg.handleBookmarkMoved("bk-not-managed-99", { parentId: "999", index: 0 });
+
+    assert.equal(stateStore.state.reverseQueue.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suppression gating – applyEpoch active
+// ---------------------------------------------------------------------------
+
+describe("suppression – applyEpoch blocks enqueueing", () => {
+  it("handleBookmarkCreated does NOT enqueue when applyEpoch is true", async () => {
+    stateStore.state = managedState({
+      suppressionState: { applyEpoch: true, epochStartedAt: "2026-02-25T10:00:00.000Z", cooldownUntil: null }
+    });
+
+    await bg.handleBookmarkCreated("bk-suppressed", {
+      title: "Should Not Enqueue",
+      url: "https://example.com/suppressed",
+      parentId: "101"
+    });
+
+    assert.equal(stateStore.state.reverseQueue.length, 0);
+  });
+
+  it("handleBookmarkMoved does NOT enqueue when applyEpoch is true", async () => {
+    stateStore.state = managedState({
+      suppressionState: { applyEpoch: true, epochStartedAt: "2026-02-25T10:00:00.000Z", cooldownUntil: null }
+    });
+
+    await bg.handleBookmarkMoved("bk1", { parentId: "101", index: 0 });
+
+    assert.equal(stateStore.state.reverseQueue.length, 0);
+  });
+});
