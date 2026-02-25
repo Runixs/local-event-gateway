@@ -128,7 +128,10 @@ async function syncFromPayload(payload) {
   await clearManagedTree(rootId, state);
   const nextState = {
     managedFolderIds: { __root__: rootId },
-    managedBookmarkIds: {}
+    managedBookmarkIds: {},
+    reverseQueue: state.reverseQueue,
+    bookmarkIdToManagedKey: state.bookmarkIdToManagedKey,
+    suppressionState: state.suppressionState
   };
 
   const rootOrder = [];
@@ -144,14 +147,93 @@ async function syncFromPayload(payload) {
 
 async function getState() {
   const raw = await chrome.storage.local.get(STORAGE_KEY);
-  const state = raw?.[STORAGE_KEY];
-  if (!state || typeof state !== "object") {
-    return { managedFolderIds: {}, managedBookmarkIds: {} };
-  }
+  return migrateState(raw?.[STORAGE_KEY]);
+}
+
+/**
+ * Migrates raw storage state to the current shape, adding new fields with safe
+ * defaults when missing. Preserves all existing fields without data loss.
+ * Safe to call with null, undefined, or any non-object value.
+ * @param {unknown} raw
+ * @returns {{ managedFolderIds: object, managedBookmarkIds: object, reverseQueue: Array, bookmarkIdToManagedKey: object, suppressionState: { applyEpoch: boolean, epochStartedAt: string|null, cooldownUntil: string|null } }}
+ */
+function migrateState(raw) {
+  const base = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
+  const sup = (base.suppressionState && typeof base.suppressionState === "object" && !Array.isArray(base.suppressionState))
+    ? base.suppressionState
+    : {};
   return {
-    managedFolderIds: state.managedFolderIds || {},
-    managedBookmarkIds: state.managedBookmarkIds || {}
+    managedFolderIds: (base.managedFolderIds && typeof base.managedFolderIds === "object" && !Array.isArray(base.managedFolderIds))
+      ? base.managedFolderIds
+      : {},
+    managedBookmarkIds: (base.managedBookmarkIds && typeof base.managedBookmarkIds === "object" && !Array.isArray(base.managedBookmarkIds))
+      ? base.managedBookmarkIds
+      : {},
+    reverseQueue: Array.isArray(base.reverseQueue) ? base.reverseQueue : [],
+    bookmarkIdToManagedKey: (base.bookmarkIdToManagedKey && typeof base.bookmarkIdToManagedKey === "object" && !Array.isArray(base.bookmarkIdToManagedKey))
+      ? base.bookmarkIdToManagedKey
+      : {},
+    suppressionState: {
+      applyEpoch: sup.applyEpoch === true,
+      epochStartedAt: sup.epochStartedAt ?? null,
+      cooldownUntil: sup.cooldownUntil ?? null
+    }
   };
+}
+
+/**
+ * Adds a ReverseEvent to the durable reverse queue with retryCount 0.
+ * Mutates state in place — caller must persist to chrome.storage.local.
+ * @param {{ reverseQueue: Array }} state
+ * @param {ReverseEvent} event
+ */
+function enqueueReverseEvent(state, event) {
+  state.reverseQueue.push({
+    event,
+    retryCount: 0,
+    enqueuedAt: new Date().toISOString()
+  });
+}
+
+/**
+ * Removes queue items whose eventId appears in ackedEventIds.
+ * Non-matching items are preserved. Mutates state in place.
+ * Caller must persist to chrome.storage.local.
+ * @param {{ reverseQueue: Array }} state
+ * @param {string[]} ackedEventIds
+ */
+function dequeueAckedEvents(state, ackedEventIds) {
+  const idSet = new Set(ackedEventIds);
+  state.reverseQueue = state.reverseQueue.filter((item) => !idSet.has(item.event.eventId));
+}
+
+/**
+ * Records a bookmarkId -> managedKey reverse lookup mapping.
+ * Mutates state in place — caller must persist to chrome.storage.local.
+ * @param {{ bookmarkIdToManagedKey: object }} state
+ * @param {string} bookmarkId
+ * @param {string} managedKey
+ */
+function updateBookmarkKeyMapping(state, bookmarkId, managedKey) {
+  state.bookmarkIdToManagedKey[bookmarkId] = managedKey;
+}
+
+/**
+ * Sets or clears the apply-epoch suppression flag.
+ * When active=true, records epochStartedAt timestamp.
+ * When active=false, clears both epochStartedAt and cooldownUntil.
+ * Mutates state in place — caller must persist to chrome.storage.local.
+ * @param {{ suppressionState: { applyEpoch: boolean, epochStartedAt: string|null, cooldownUntil: string|null } }} state
+ * @param {boolean} active
+ */
+function setApplyEpoch(state, active) {
+  state.suppressionState.applyEpoch = active;
+  if (active) {
+    state.suppressionState.epochStartedAt = new Date().toISOString();
+  } else {
+    state.suppressionState.epochStartedAt = null;
+    state.suppressionState.cooldownUntil = null;
+  }
 }
 
 async function ensureRootFolder(name, state) {
