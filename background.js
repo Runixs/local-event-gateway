@@ -7,6 +7,16 @@ const DEFAULT_BRIDGE = {
 };
 
 /**
+ * Structured audit logger for reverse-sync pipeline events.
+ * Emits redact-safe JSON to console — never logs token values or full note content.
+ * @param {string} event - event name: 'enqueue' | 'flush' | 'ack' | 'error'
+ * @param {object} data - event-specific fields (no token/secret values)
+ */
+function rsLog(event, data) {
+  console.log(JSON.stringify({ ts: Date.now(), event, ...data }));
+}
+
+/**
  * Reverse sync contract docs shared with the plugin repository.
  * Backward compatibility strategy: parser may normalize legacy events that omit
  * `schemaVersion` or per-event `batchId` by falling back to schema v1 and the
@@ -104,6 +114,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
+chrome.bookmarks.onCreated.addListener(handleBookmarkCreated);
+chrome.bookmarks.onChanged.addListener(handleBookmarkChanged);
+chrome.bookmarks.onRemoved.addListener(handleBookmarkRemoved);
+chrome.bookmarks.onMoved.addListener(handleBookmarkMoved);
+chrome.bookmarks.onImportBegan.addListener(handleImportBegan);
+chrome.bookmarks.onImportEnded.addListener(handleImportEnded);
+
 async function syncFromBridge() {
   const config = await getBridgeConfig();
   const response = await fetch(config.url, {
@@ -131,7 +148,8 @@ async function syncFromPayload(payload) {
     managedBookmarkIds: {},
     reverseQueue: state.reverseQueue,
     bookmarkIdToManagedKey: state.bookmarkIdToManagedKey,
-    suppressionState: state.suppressionState
+    suppressionState: state.suppressionState,
+    importInProgress: state.importInProgress
   };
 
   const rootOrder = [];
@@ -155,7 +173,7 @@ async function getState() {
  * defaults when missing. Preserves all existing fields without data loss.
  * Safe to call with null, undefined, or any non-object value.
  * @param {unknown} raw
- * @returns {{ managedFolderIds: object, managedBookmarkIds: object, reverseQueue: Array, bookmarkIdToManagedKey: object, suppressionState: { applyEpoch: boolean, epochStartedAt: string|null, cooldownUntil: string|null } }}
+ * @returns {{ managedFolderIds: object, managedBookmarkIds: object, reverseQueue: Array, bookmarkIdToManagedKey: object, suppressionState: { applyEpoch: boolean, epochStartedAt: string|null, cooldownUntil: string|null }, importInProgress: boolean }}
  */
 function migrateState(raw) {
   const base = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
@@ -177,7 +195,8 @@ function migrateState(raw) {
       applyEpoch: sup.applyEpoch === true,
       epochStartedAt: sup.epochStartedAt ?? null,
       cooldownUntil: sup.cooldownUntil ?? null
-    }
+    },
+    importInProgress: base.importInProgress === true
   };
 }
 
@@ -194,6 +213,7 @@ function enqueueReverseEvent(state, event) {
     enqueuedAt: new Date().toISOString()
   });
 }
+  rsLog('enqueue', { batchId: event.batchId, eventId: event.eventId, type: event.type });
 
 /**
  * Removes queue items whose eventId appears in ackedEventIds.
@@ -205,6 +225,38 @@ function enqueueReverseEvent(state, event) {
 function dequeueAckedEvents(state, ackedEventIds) {
   const idSet = new Set(ackedEventIds);
   state.reverseQueue = state.reverseQueue.filter((item) => !idSet.has(item.event.eventId));
+}
+
+/**
+ * Stub: flush pending reverse queue items to the plugin bridge endpoint.
+ * T6 will implement the actual HTTP send. rsLog calls are in place for audit trail.
+ * @param {{ reverseQueue: Array }} state
+ * @param {string} batchId
+ * @param {string} bridgeUrl
+ * @param {string} token - NEVER passed to rsLog
+ */
+async function flushReverseQueue(state, batchId, bridgeUrl, token) {
+  const count = state.reverseQueue.length;
+  rsLog('flush', { batchId, count });
+  // TODO(T6): HTTP POST to bridgeUrl with Authorization omitted from logs
+  // On success, parse BatchAckResponse and call processReverseAckResponse(state, ackResponse)
+  void bridgeUrl;
+  void token;
+}
+
+/**
+ * Process a BatchAckResponse from the plugin bridge and emit per-event ack logs.
+ * Dequeues acked events from state. Caller must persist state to chrome.storage.local.
+ * @param {{ reverseQueue: Array }} state
+ * @param {{ batchId: string, results: Array<{ eventId: string, status: string }> }} ackResponse
+ */
+function processReverseAckResponse(state, ackResponse) {
+  const ackedEventIds = [];
+  for (const result of ackResponse.results) {
+    rsLog('ack', { batchId: ackResponse.batchId, eventId: result.eventId, status: result.status });
+    ackedEventIds.push(result.eventId);
+  }
+  dequeueAckedEvents(state, ackedEventIds);
 }
 
 /**
@@ -380,4 +432,133 @@ async function ensureAutoSyncAlarm() {
   await chrome.alarms.create("local-event-gateway.autoSync", {
     periodInMinutes: 1
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// Managed-ID helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if the given chrome bookmark id is tracked as a managed bookmark.
+ * @param {{ bookmarkIdToManagedKey: object }} state
+ * @param {string} id
+ * @returns {boolean}
+ */
+function isManagedBookmarkId(state, id) {
+  return Boolean(state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id] != null);
+}
+
+/**
+ * Returns true if the given chrome id is tracked as a managed folder.
+ * @param {{ managedFolderIds: object }} state
+ * @param {string} id
+ * @returns {boolean}
+ */
+function isManagedFolderId(state, id) {
+  const fids = state.managedFolderIds;
+  if (!fids || typeof fids !== "object" || Array.isArray(fids)) return false;
+  for (const key in fids) {
+    if (fids[key] === id) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Bookmark import gating
+// ---------------------------------------------------------------------------
+
+async function handleImportBegan() {
+  const state = await getState();
+  state.importInProgress = true;
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+}
+
+async function handleImportEnded() {
+  const state = await getState();
+  state.importInProgress = false;
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  const config = await getBridgeConfig();
+  if (config.autoSync) {
+    void syncFromBridge().catch(() => {});
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bookmark change handlers — filter to managed subtree only
+// ---------------------------------------------------------------------------
+
+async function handleBookmarkCreated(id, bookmark) {
+  const state = await getState();
+  if (state.importInProgress) return;
+  const parentManaged = bookmark && isManagedFolderId(state, bookmark.parentId);
+  const selfManaged = isManagedBookmarkId(state, id);
+  if (!selfManaged && !parentManaged) return;
+  const event = {
+    batchId: crypto.randomUUID(),
+    eventId: crypto.randomUUID(),
+    type: "bookmark_created",
+    bookmarkId: id,
+    managedKey: (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id]) || "",
+    title: bookmark ? bookmark.title : undefined,
+    url: bookmark ? bookmark.url : undefined,
+    occurredAt: new Date().toISOString(),
+    schemaVersion: "1"
+  };
+  enqueueReverseEvent(state, event);
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+}
+
+async function handleBookmarkChanged(id, changeInfo) {
+  const state = await getState();
+  if (!isManagedBookmarkId(state, id)) return;
+  const event = {
+    batchId: crypto.randomUUID(),
+    eventId: crypto.randomUUID(),
+    type: "bookmark_updated",
+    bookmarkId: id,
+    managedKey: (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id]) || "",
+    title: changeInfo ? changeInfo.title : undefined,
+    url: changeInfo ? changeInfo.url : undefined,
+    occurredAt: new Date().toISOString(),
+    schemaVersion: "1"
+  };
+  enqueueReverseEvent(state, event);
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+}
+
+async function handleBookmarkRemoved(id, removeInfo) {
+  const state = await getState();
+  const isBookmark = isManagedBookmarkId(state, id);
+  const isFolder = isManagedFolderId(state, id);
+  if (!isBookmark && !isFolder) return;
+  const event = {
+    batchId: crypto.randomUUID(),
+    eventId: crypto.randomUUID(),
+    type: "bookmark_deleted",
+    bookmarkId: id,
+    managedKey: (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id]) || "",
+    occurredAt: new Date().toISOString(),
+    schemaVersion: "1"
+  };
+  enqueueReverseEvent(state, event);
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+}
+
+async function handleBookmarkMoved(id, moveInfo) {
+  const state = await getState();
+  const isBookmark = isManagedBookmarkId(state, id);
+  const isFolder = isManagedFolderId(state, id);
+  if (!isBookmark && !isFolder) return;
+  const event = {
+    batchId: crypto.randomUUID(),
+    eventId: crypto.randomUUID(),
+    type: "bookmark_updated",
+    bookmarkId: id,
+    managedKey: (state.bookmarkIdToManagedKey && state.bookmarkIdToManagedKey[id]) || "",
+    occurredAt: new Date().toISOString(),
+    schemaVersion: "1"
+  };
+  enqueueReverseEvent(state, event);
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
 }
