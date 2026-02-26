@@ -1,5 +1,3 @@
-"use strict";
-
 const assert = require("node:assert/strict");
 const { describe, it, beforeEach } = require("node:test");
 const { readFileSync } = require("node:fs");
@@ -154,5 +152,25 @@ describe("websocket runtime", () => {
     const session = await h.bg.getWebSocketSession();
     assert.equal(typeof session.status, "string");
     assert.equal(session.reconnectAttempt >= 0, true);
+  });
+
+  it("reconnects after close and resets session to connected", async () => {
+    await h.bg.ensureWebSocketSession();
+    await h.bg.ensureWebSocketConnection("test");
+    assert.equal(h.sockets.length, 1);
+
+    h.sockets[0].open();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.sockets[0].close(4000, "heartbeat_timeout");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    await h.bg.ensureWebSocketConnection("manual_reconnect");
+    assert.equal(h.sockets.length, 2);
+    h.sockets[1].open();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const session = await h.bg.getWebSocketSession();
+    assert.equal(session.status, "connected");
+    assert.equal(session.reconnectAttempt, 0);
   });
 });
