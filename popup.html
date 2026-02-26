@@ -78,8 +78,20 @@
     <strong>Local Event Gateway</strong>
     <p>Sync bookmarks from local bridge payload.</p>
     <label>
+      Active Client
+      <select id="bridge-client"></select>
+    </label>
+    <div style="display:flex; gap:6px; margin-top:6px;">
+      <button id="client-add" type="button">Add Client</button>
+      <button id="client-remove" type="button">Remove Client</button>
+    </div>
+    <label>
       Bridge URL
       <textarea id="bridge-url" placeholder="http://127.0.0.1:27123/payload"></textarea>
+    </label>
+    <label>
+      WebSocket URL
+      <textarea id="bridge-ws-url" placeholder="ws://127.0.0.1:27123/ws"></textarea>
     </label>
     <label>
       Bridge token
@@ -91,6 +103,7 @@
     <button id="save" type="button">Save Gateway Settings</button>
     <button id="sync" type="button">Sync From Bridge</button>
     <div id="status" class="status"></div>
+    <div id="ws-status" class="status"></div>
 
     <div class="debug">
       <strong>Reverse Sync Debug</strong>

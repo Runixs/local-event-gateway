@@ -247,3 +247,23 @@ describe("flushReverseQueue", () => {
     assert.equal(h.fetchCalls[0][0], "http://127.0.0.1:27123/reverse-sync");
   });
 });
+
+describe("runReverseFlush websocket-only path", () => {
+  let h;
+
+  beforeEach(() => {
+    h = createHarness();
+  });
+
+  it("does not fallback to HTTP fetch when websocket is unavailable", async () => {
+    const state = h.bg.migrateState({
+      reverseQueue: [queueItem("e1", "b1", 0)]
+    });
+    h.stateStore.state = state;
+
+    await h.bg.runReverseFlush();
+
+    assert.equal(h.fetchCalls.length, 0);
+    assert.equal(h.stateStore.state.reverseQueue.length, 1);
+  });
+});

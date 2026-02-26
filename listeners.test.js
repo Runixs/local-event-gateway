@@ -164,7 +164,7 @@ describe("handleBookmarkCreated – managed parent folder", () => {
     assert.equal(stateStore.state.bookmarkIdToManagedKey["bk-folder-parent"], "folder:Projects");
   });
 
-  it("does NOT enqueue when parent folder is unmanaged", async () => {
+  it("enqueues unmanaged create with bookmark fallback key", async () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkCreated("bk-unmanaged", {
@@ -173,7 +173,8 @@ describe("handleBookmarkCreated – managed parent folder", () => {
       parentId: "999"   // not in managedFolderIds values
     });
 
-    assert.equal(stateStore.state.reverseQueue.length, 0);
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    assert.equal(stateStore.state.reverseQueue[0].event.managedKey, "bookmark:bk-unmanaged");
   });
 
   it("enqueues bookmark_created for unmanaged parent by deriving folder key from parent title", async () => {
@@ -233,7 +234,7 @@ describe("handleBookmarkChanged – managed bookmark", () => {
     assert.equal(item.event.schemaVersion, "1");
   });
 
-  it("does NOT enqueue for unmanaged bookmark id", async () => {
+  it("enqueues unmanaged bookmark updates with fallback key", async () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkChanged("bk-unmanaged-99", {
@@ -241,7 +242,8 @@ describe("handleBookmarkChanged – managed bookmark", () => {
       url: "https://other.com"
     });
 
-    assert.equal(stateStore.state.reverseQueue.length, 0);
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    assert.equal(stateStore.state.reverseQueue[0].event.managedKey, "bookmark:bk-unmanaged-99");
   });
 
   it("enqueues folder_renamed event for managed folder id", async () => {
@@ -294,20 +296,22 @@ describe("handleBookmarkRemoved – managed bookmark", () => {
     assert.equal(item.event.schemaVersion, "1");
   });
 
-  it("does NOT enqueue for unmanaged id", async () => {
+  it("enqueues unmanaged remove with fallback key", async () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkRemoved("bk-not-managed", {});
 
-    assert.equal(stateStore.state.reverseQueue.length, 0);
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    assert.equal(stateStore.state.reverseQueue[0].event.managedKey, "bookmark:bk-not-managed");
   });
 
-  it("does NOT enqueue for managed folder id", async () => {
+  it("enqueues remove for folder id with fallback key", async () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkRemoved("101", { parentId: "100", index: 0 });
 
-    assert.equal(stateStore.state.reverseQueue.length, 0);
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    assert.equal(stateStore.state.reverseQueue[0].event.managedKey, "bookmark:101");
   });
 });
 
@@ -354,20 +358,22 @@ describe("handleBookmarkMoved – managed bookmark", () => {
     assert.equal(item.retryCount, 0);
   });
 
-  it("does NOT enqueue for unmanaged bookmark id", async () => {
+  it("enqueues unmanaged moved bookmark with fallback key", async () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkMoved("bk-not-managed-99", { parentId: "999", index: 0 });
 
-    assert.equal(stateStore.state.reverseQueue.length, 0);
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    assert.equal(stateStore.state.reverseQueue[0].event.managedKey, "bookmark:bk-not-managed-99");
   });
 
-  it("does NOT enqueue for managed folder id", async () => {
+  it("enqueues moved event for folder id using fallback key", async () => {
     stateStore.state = managedState();
 
     await bg.handleBookmarkMoved("101", { parentId: "100", index: 0 });
 
-    assert.equal(stateStore.state.reverseQueue.length, 0);
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    assert.equal(stateStore.state.reverseQueue[0].event.managedKey, "bookmark:101");
   });
 });
 

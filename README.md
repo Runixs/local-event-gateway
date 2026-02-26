@@ -1,6 +1,6 @@
 # local-event-gateway
 
-Chrome MV3 extension providing a standard local bridge automation interface for bookmark sync.
+Chrome MV3 extension that syncs bookmarks with `project2chrome` over WebSocket action envelopes.
 
 ## Load Extension
 
@@ -9,121 +9,82 @@ Chrome MV3 extension providing a standard local bridge automation interface for 
 3. Click `Load unpacked`.
 4. Select this folder: `/Users/runixs/working_local/chrome/local-event-gateway`.
 
-## Bridge Contract
+## Transport Model
 
-- Default bridge URL: `http://127.0.0.1:27123/payload`
-- Required request header: `X-Project2Chrome-Token: <token>`
-- Auto sync: every 1 minute via MV3 alarms
+- Active transport is WebSocket (`ws://` / `wss://`) per client profile.
+- HTTP `/payload` and `/reverse-sync` are no longer used as active runtime transport paths.
+- On startup/install/config changes, the extension attempts to connect and perform handshake.
+- Keepalive runs with heartbeat ping/pong and reconnect backoff.
 
-## Sync Behavior
+## WebSocket Envelope
 
-- Performs a managed-tree full refresh before applying each payload sync.
-- Preserves payload order for folders and bookmarks.
-- Supports duplicate bookmark URLs when the payload provides multiple link entries.
-- Treats payload as source of truth for all managed nodes under the gateway root.
+Envelope validation is defined in `websocket-envelope.js`.
 
-## Supported Tools
+Core frame types:
 
-- [Runixs/project2chrome](https://github.com/Runixs/project2chrome): Obsidian plugin that builds and serves bookmark payloads consumed by this extension.
+- `handshake`
+- `handshake_ack`
+- `action`
+- `ack`
+- `error`
+- `heartbeat_ping`
+- `heartbeat_pong`
+
+Action frame fields:
+
+- `clientId`
+- `eventId`
+- `idempotencyKey`
+- `op`
+- `target`
+- `payload`
+- `occurredAt`
+
+## Runtime Behavior
+
+- Inbound action frames are validated, deduped by `clientId + idempotencyKey/eventId`, queued, then applied.
+- Outbound bookmark events are queued, coalesced, and sent as WebSocket `action` frames.
+- ACK frames are reconciled into local queue state (`applied`, `duplicate`, `skipped`, `rejected`).
+- Loop suppression uses apply epoch + cooldown to avoid echo cycles.
+
+## Multi-Client Profiles
+
+- Profiles are stored in `chrome.storage.local` under `local_event_gateway_bridge`.
+- Active profile defines `clientId`, `token`, and `wsUrl` for the current session.
+- Popup supports add/remove/select profile and saving active profile settings.
+
+## Debug and Status
+
+Popup shows:
+
+- Current WebSocket status (`CONNECTED`, `RECONNECTING`, `DISCONNECTED`)
+- Active client id
+- Reconnect attempt count
+- Inbound/outbound queue counts
+- Last error (if any)
+- Reverse-sync debug timeline
 
 ## Messages
 
 - `gateway.getBridgeConfig`
 - `gateway.setBridgeConfig`
 - `gateway.syncFromBridge`
+- `gateway.getWebSocketSession`
+- `gateway.getDebugState`
+- `gateway.setDebugOptions`
+- `gateway.clearDebugEvents`
 
 ## Permissions
 
 - `bookmarks`
 - `storage`
 - `alarms`
-- `host_permissions`: localhost / 127.0.0.1
+- `host_permissions` for localhost HTTP/WS endpoints
 
-## Reverse Sync (Bookmark → Obsidian)
+## Test and Validate
 
-Reverse sync captures Chrome bookmark events and posts them back to the Obsidian plugin bridge so that note content stays in sync with bookmark changes made inside Chrome.
-
-### Event Capture
-
-The extension listens on four Chrome bookmark event listeners:
-
-| Event | Captured as |
-|---|---|
-| `chrome.bookmarks.onCreated` | `bookmark_created` |
-| `chrome.bookmarks.onChanged` (managed bookmark title/url) | `bookmark_updated` |
-| `chrome.bookmarks.onChanged` (managed folder title) | `folder_renamed` |
-| `chrome.bookmarks.onMoved` (managed bookmark) | `bookmark_updated` |
-| `chrome.bookmarks.onRemoved` (managed bookmark) | `bookmark_deleted` |
-
-Only events on extension-managed nodes are forwarded. Managed folder move/remove events are ignored in V1.
-
-### Managed Key Resolution
-
-The extension keeps both key directions in storage:
-
-- `managedBookmarkIds`: `managedKey -> bookmarkId`
-- `bookmarkIdToManagedKey`: `bookmarkId -> managedKey`
-
-During payload apply, both maps are rebuilt from newly created managed bookmarks. Reverse listeners resolve keys with `bookmarkIdToManagedKey` first and then fall back to scanning `managedBookmarkIds` to avoid dropping managed events when state is partially stale.
-
-### Batching and Durability
-
-Events are coalesced into batches before being posted to the plugin:
-
-- **Batch window**: 2–5 seconds after the first event in a group.
-- **Alarm-backed durability**: a MV3 alarm ensures pending batches are flushed even if the service worker is recycled between events.
-
-### Retry Pipeline
-
-Failed POST requests to `/reverse-sync` are retried automatically:
-
-- Maximum **3 retry attempts** with exponential backoff.
-- After 3 failures, the batch is moved to a **quarantine queue** and not retried.
-- Quarantined batches are logged and can be inspected in `chrome.storage.local`.
-
-### Loop Suppression
-
-To prevent a reverse-sync write from triggering another outbound payload fetch (which would create an event loop):
-
-- An `applyEpoch` flag is set in `chrome.storage.local` before each payload apply cycle.
-- A **3-second cooldown** is enforced after each apply: any bookmark events fired during the cooldown are dropped by the reverse-sync listener.
-- The flag is cleared after the cooldown expires.
-
-### Reverse Sync Endpoint
-
+```bash
+node --test *.test.js
+node --check background.js
+node --check popup.js
 ```
-POST http://127.0.0.1:<port>/reverse-sync
-X-Project2Chrome-Token: <token>
-```
-
-Payload body:
-
-```json
-{
-  "batchId": "e48cb577-7d95-45d7-83f1-f8b4fe3ad8c0",
-  "sentAt": "2026-02-25T11:00:00.000Z",
-  "events": [
-    {
-      "batchId": "e48cb577-7d95-45d7-83f1-f8b4fe3ad8c0",
-      "eventId": "d2116999-f8df-4890-bab3-c450efdd2eb6",
-      "type": "bookmark_updated",
-      "bookmarkId": "123",
-      "managedKey": "note:1_Projects/MyProject/task.md",
-      "title": "New title",
-      "url": "https://example.com/new",
-      "occurredAt": "2026-02-25T11:00:00.000Z",
-      "schemaVersion": "1"
-    }
-  ]
-}
-```
-
-### ACK Statuses
-
-| Status | Meaning |
-|---|---|
-| `applied` | Write successfully applied to note |
-| `skipped_ambiguous` | Could not resolve target; write skipped |
-| `skipped_unmanaged` | Node is not managed by this extension |
-| `rejected_invalid` | Payload validation failed |
-| `duplicate` | Identical event already processed |
