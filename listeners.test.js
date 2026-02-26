@@ -21,6 +21,7 @@ const { randomUUID } = require("node:crypto");
 const SRC = readFileSync(path.join(__dirname, "background.js"), "utf8");
 const STORAGE_KEY = "local_event_gateway_state";
 const bookmarkNodesById = new Map();
+const bookmarkChildrenByParentId = new Map();
 
 /** Shared mutable store — set .state before each test */
 const stateStore = { state: null };
@@ -66,7 +67,11 @@ function makeMockChrome() {
         const node = bookmarkNodesById.get(String(id));
         return Promise.resolve(node ? [node] : []);
       },
-      getChildren() { return Promise.resolve([]); },
+      getChildren(parentId) {
+        const key = String(parentId ?? "");
+        const children = bookmarkChildrenByParentId.get(key) || [];
+        return Promise.resolve(children);
+      },
       getTree() { return Promise.resolve([{ children: [{ id: "1", children: [] }] }]); }
     }
   };
@@ -90,6 +95,7 @@ before(() => {
 
 beforeEach(() => {
   bookmarkNodesById.clear();
+  bookmarkChildrenByParentId.clear();
 });
 
 // ---------------------------------------------------------------------------
@@ -365,6 +371,28 @@ describe("handleBookmarkMoved – managed bookmark", () => {
 
     assert.equal(stateStore.state.reverseQueue.length, 1);
     assert.equal(stateStore.state.reverseQueue[0].event.managedKey, "bookmark:bk-not-managed-99");
+  });
+
+  it("sets moveIndex when moved within the same parent folder", async () => {
+    stateStore.state = managedState();
+    bookmarkChildrenByParentId.set("101", [
+      { id: "folder-child", title: "Sub", url: undefined },
+      { id: "bk-other", title: "Other", url: "https://other.test" },
+      { id: "bk1", title: "Moved", url: "https://moved.test" }
+    ]);
+
+    await bg.handleBookmarkMoved("bk1", {
+      parentId: "101",
+      oldParentId: "101",
+      index: 2,
+      oldIndex: 0
+    });
+
+    assert.equal(stateStore.state.reverseQueue.length, 1);
+    const item = stateStore.state.reverseQueue[0];
+    assert.equal(item.event.type, "bookmark_updated");
+    assert.equal(item.event.managedKey, "note:Projects/Alpha");
+    assert.equal(item.event.moveIndex, 1);
   });
 
   it("enqueues moved event for folder id using fallback key", async () => {

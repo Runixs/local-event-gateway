@@ -330,6 +330,7 @@ function createWsEventId() {
  * @property {string} bookmarkId
  * @property {string} managedKey
  * @property {string=} parentId
+ * @property {number=} moveIndex
  * @property {string=} title
  * @property {string=} url
  * @property {string} occurredAt ISO timestamp
@@ -1215,6 +1216,7 @@ async function flushReverseQueueOverWebSocket(state, clientId) {
         bookmarkId: event.bookmarkId,
         managedKey: event.managedKey,
         parentId: event.parentId,
+        moveIndex: event.moveIndex,
         title: event.title,
         url: event.url
       }
@@ -1825,6 +1827,37 @@ async function resolveFolderNameFromBookmarkId(id) {
   }
 }
 
+async function resolveLinkIndexWithinParent(parentId, bookmarkId) {
+  if (!parentId || !bookmarkId) {
+    return undefined;
+  }
+
+  try {
+    const children = await chrome.bookmarks.getChildren(parentId);
+    if (!Array.isArray(children)) {
+      return undefined;
+    }
+
+    let linkIndex = 0;
+    for (const child of children) {
+      if (!child || typeof child.id !== "string") {
+        continue;
+      }
+
+      if (child.url) {
+        if (child.id === bookmarkId) {
+          return linkIndex;
+        }
+        linkIndex += 1;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Bookmark import gating
 // ---------------------------------------------------------------------------
@@ -1958,6 +1991,15 @@ async function handleBookmarkMoved(id, moveInfo) {
   }
   const managedKey = getManagedBookmarkKeyById(state, id);
   const resolvedManagedKey = managedKey || `bookmark:${id}`;
+  const sameParentMove = Boolean(
+    moveInfo
+    && typeof moveInfo.parentId === "string"
+    && typeof moveInfo.oldParentId === "string"
+    && moveInfo.parentId === moveInfo.oldParentId
+  );
+  const moveIndex = sameParentMove
+    ? await resolveLinkIndexWithinParent(moveInfo.parentId, id)
+    : undefined;
   const event = {
     batchId: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
@@ -1965,6 +2007,7 @@ async function handleBookmarkMoved(id, moveInfo) {
     bookmarkId: id,
     managedKey: resolvedManagedKey,
     parentId: moveInfo ? moveInfo.parentId : undefined,
+    moveIndex,
     occurredAt: new Date().toISOString(),
     schemaVersion: "1"
   };
