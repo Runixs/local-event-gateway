@@ -1,0 +1,152 @@
+TAP version 13
+# Subtest: processReverseAckResponse – applied
+    # Subtest: applied: removes event from queue
+    ok 1 - applied: removes event from queue # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.394334
+      ...
+    # Subtest: applied with resolvedKey: updates bookmarkIdToManagedKey
+    ok 2 - applied with resolvedKey: updates bookmarkIdToManagedKey # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.063083
+      ...
+    # Subtest: applied without resolvedKey: does not add null/undefined to mapping
+    ok 3 - applied without resolvedKey: does not add null/undefined to mapping # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.05375
+      ...
+    # Subtest: applied with resolvedKey: does not overwrite existing stable mapping with empty key
+    ok 4 - applied with resolvedKey: does not overwrite existing stable mapping with empty key # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.057
+      ...
+    1..4
+ok 1 - processReverseAckResponse – applied
+  ---
+  duration_ms: 0.986791
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – duplicate
+    # Subtest: duplicate: removes event from queue (idempotent, already processed)
+    ok 1 - duplicate: removes event from queue (idempotent, already processed) # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.0685
+      ...
+    # Subtest: duplicate: does not update bookmarkIdToManagedKey even if resolvedKey present
+    ok 2 - duplicate: does not update bookmarkIdToManagedKey even if resolvedKey present # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.100333
+      ...
+    1..2
+ok 2 - processReverseAckResponse – duplicate
+  ---
+  duration_ms: 0.270208
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – skipped_ambiguous
+    # Subtest: skipped_ambiguous: removes event from queue (final, not retried)
+    ok 1 - skipped_ambiguous: removes event from queue (final, not retried) # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.062458
+      ...
+    1..1
+ok 3 - processReverseAckResponse – skipped_ambiguous
+  ---
+  duration_ms: 0.280084
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – skipped_unmanaged
+    # Subtest: skipped_unmanaged: removes event from queue (final, not retried)
+    ok 1 - skipped_unmanaged: removes event from queue (final, not retried) # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.052333
+      ...
+    1..1
+ok 4 - processReverseAckResponse – skipped_unmanaged
+  ---
+  duration_ms: 0.183042
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – rejected_invalid
+    # Subtest: rejected_invalid: removes event from queue (final, not retried)
+    ok 1 - rejected_invalid: removes event from queue (final, not retried) # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.123125
+      ...
+    1..1
+ok 5 - processReverseAckResponse – rejected_invalid
+  ---
+  duration_ms: 0.224875
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – unknown status
+    # Subtest: unknown status: keeps event in queue for retry
+    ok 1 - unknown status: keeps event in queue for retry # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.496666
+      ...
+    # Subtest: unknown status: does not mutate bookmarkIdToManagedKey
+    ok 2 - unknown status: does not mutate bookmarkIdToManagedKey # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.048625
+      ...
+    1..2
+ok 6 - processReverseAckResponse – unknown status
+  ---
+  duration_ms: 0.621708
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – mixed batch
+    # Subtest: applied + skipped + unknown: correct subset removed
+    ok 1 - applied + skipped + unknown: correct subset removed # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.13025
+      ...
+    # Subtest: all statuses in one batch: correct final queue
+    ok 2 - all statuses in one batch: correct final queue # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.039458
+      ...
+    1..2
+ok 7 - processReverseAckResponse – mixed batch
+  ---
+  duration_ms: 0.237042
+  type: 'suite'
+  ...
+# Subtest: processReverseAckResponse – resolvedKey in applied ACK
+    # Subtest: resolvedKey updates bookmarkIdToManagedKey for correct bookmarkId
+    ok 1 - resolvedKey updates bookmarkIdToManagedKey for correct bookmarkId # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.044917
+      ...
+    # Subtest: resolvedKey for one event does not affect mapping for another
+    ok 2 - resolvedKey for one event does not affect mapping for another # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.035208
+      ...
+    # Subtest: resolvedKey in applied overwrites pre-existing mapping
+    ok 3 - resolvedKey in applied overwrites pre-existing mapping # SKIP test name does not match pattern
+      ---
+      duration_ms: 0.031833
+      ...
+    1..3
+ok 8 - processReverseAckResponse – resolvedKey in applied ACK
+  ---
+  duration_ms: 0.175958
+  type: 'suite'
+  ...
+1..8
+# tests 16
+# suites 8
+# pass 0
+# fail 0
+# cancelled 0
+# skipped 16
+# todo 0
+# duration_ms 68.237792
+{"ts":1772013861584,"event":"warn","batchId":"b1","eventId":"e1","status":"unknown_future_status","reason":"unknown_status"}
+CORRECT: unknown status keeps event in queue — assertion correctly catches naive dequeue:
+Expected values to be strictly equal:
+
+1 !== 0
+

@@ -4,7 +4,14 @@
   "version": "0.1.0",
   "description": "Local bridge driven bookmark sync gateway.",
   "permissions": ["bookmarks", "storage", "alarms"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "ws://127.0.0.1/*",
+    "ws://localhost/*",
+    "wss://127.0.0.1/*",
+    "wss://localhost/*"
+  ],
   "action": {
     "default_title": "Local Event Gateway",
     "default_popup": "popup.html"
